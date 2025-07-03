@@ -1,0 +1,270 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: yuxi-api:0.2.0.dev
+    container_name: api-dev
+    working_dir: /app
+    volumes:
+      - ./server:/app/server
+      - ./src:/app/src
+      - ./saves:/app/saves
+      - ./test:/app/test
+      - ${MODEL_DIR:-./models}:/models  # 使用默认值处理未定义的环境变量
+    ports:
+      - "5050:5050"
+    networks:
+      - app-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - src/.env
+    environment:
+      - NEO4J_URI=${NEO4J_URI:-bolt://graph:7687}
+      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-0123456789}
+      - MILVUS_URI=${MILVUS_URI:-http://milvus:19530}
+      - MINERU_OCR_URI=${MINERU_OCR_URI:-http://mineru:30000}
+      - PADDLEX_URI=${PADDLEX_URI:-http://paddlex-ocr:8080}
+      - MINIO_URI=${MINIO_URI:-http://milvus-minio:9000}
+      # PostgreSQL 配置
+      - POSTGRES_URI=postgresql://${POSTGRES_USER:-lightrag}:${POSTGRES_PASSWORD:-lightrag}@postgres-lightrag:5432/${POSTGRES_DATABASE:-lightrag}
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres-lightrag}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE:-lightrag}
+      - POSTGRES_USER=${POSTGRES_USER:-lightrag}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-lightrag}
+      # 连接池配置
+      - POSTGRES_MAX_CONNECTIONS=50
+      - POSTGRES_MIN_CONNECTIONS=5
+      - MODEL_DIR=/models
+      - RUNNING_IN_DOCKER=true
+    command: uv run uvicorn server.main:app --host 0.0.0.0 --port 5050 --reload
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5050/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 8
+      start_period: 180s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      target: development
+    image: yuxi-web:0.2.0.dev
+    container_name: web-dev
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    networks:
+      - app-network
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=http://api:5050
+    command: pnpm run server
+    restart: unless-stopped
+
+  # PostgreSQL 服务 - 基于官方推荐的 shangor/postgres-for-rag 镜像
+  # 提供 KV store, VectorDB (pgvector) 和 GraphDB (Apache AGE) 功能
+  postgres:
+    image: shangor/postgres-for-rag:v1.0
+    container_name: postgres-lightrag
+    environment:
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE:-lightrag}
+      - POSTGRES_USER=${POSTGRES_USER:-lightrag}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-lightrag}
+      - POSTGRES_HOST_AUTH_METHOD=md5
+      # 启用必要的扩展
+      - POSTGRES_INITDB_ARGS=--auth-host=md5
+    volumes:
+      - ./docker/volumes/postgres/data:/var/lib/postgresql/data
+      - ./docker/init-postgres.sh:/init-postgres.sh
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=${POSTGRES_PASSWORD:-lightrag} psql -h localhost -U ${POSTGRES_USER:-lightrag} -d ${POSTGRES_DATABASE:-lightrag} -c \"SELECT ag_catalog.create_graph('test_ready');\" || PGPASSWORD=${POSTGRES_PASSWORD:-lightrag} psql -h localhost -U ${POSTGRES_USER:-lightrag} -d ${POSTGRES_DATABASE:-lightrag} -c 'SELECT 1'"]
+      interval: 30s
+      timeout: 15s
+      retries: 15
+      start_period: 120s
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: ["bash", "/init-postgres.sh"]
+
+  graph:
+    image: neo4j:5.26
+    container_name: graph
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - ./docker/volumes/neo4j/data:/data
+      - ./docker/volumes/neo4j/logs:/var/lib/neo4j/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7474 || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      - NEO4J_AUTH=${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-0123456789}
+      - NEO4J_server_bolt_listen__address=0.0.0.0:7687
+      - NEO4J_server_http_listen__address=0.0.0.0:7474
+      - ENTITY_EMBEDDING=true
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  etcd:
+    container_name: milvus-etcd-dev
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - ./docker/volumes/milvus/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - ./docker/volumes/milvus/minio:/minio_data
+      - ./docker/volumes/milvus/minio_config:/root/.minio
+    command: minio server /minio_data --address 0.0.0.0:9000 --console-address 0.0.0.0:9001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  milvus:
+    image: milvusdb/milvus:v2.5.6
+    container_name: milvus
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MILVUS_LOG_LEVEL: error
+    volumes:
+      - ./docker/volumes/milvus/milvus:/var/lib/milvus
+      - ./docker/volumes/milvus/logs:/var/lib/milvus/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 60s
+      start_period: 120s
+      timeout: 30s
+      retries: 5
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - "etcd"
+      - "minio"
+    networks:
+      - app-network
+    restart: unless-stopped
+  # lastest version: wget https://gcore.jsdelivr.net/gh/opendatalab/MinerU@master/docker/compose.yaml
+  mineru:
+    build:
+      context: .
+      dockerfile: docker/mineru.Dockerfile
+    image: mineru-sglang:latest
+    container_name: mineru
+    profiles:
+      - all
+    ports:
+      - 30000:30000
+    environment:
+      MINERU_MODEL_SOURCE: modelscope
+    entrypoint: mineru-sglang-server
+    command:
+      --host 0.0.0.0
+      --port 30000
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:30000/health || exit 1"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  paddlex:
+    build:
+      context: .
+      dockerfile: docker/paddlex.Dockerfile
+    image: paddlex:latest
+    container_name: paddlex-ocr
+    profiles:
+      - all
+    volumes:
+      - ./docker/volumes/paddlex:/paddlex
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/ || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
