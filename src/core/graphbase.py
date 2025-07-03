@@ -33,23 +33,142 @@ class GraphDatabase:
         self.start()
 
     def start(self):
-        uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-        username = os.environ.get("NEO4J_USERNAME", "neo4j")
-        password = os.environ.get("NEO4J_PASSWORD", "0123456789")
+        # 使用配置文件加载连接参数
+        neo4j_config = self._get_neo4j_config()
+        
+        uri = neo4j_config.get('uri')
+        username = neo4j_config.get('username')
+        password = neo4j_config.get('password')
+        
         logger.info(f"Connecting to Neo4j: {uri}/{self.kgdb_name}")
         try:
-            self.driver = GD.driver(f"{uri}/{self.kgdb_name}", auth=(username, password))
+            # 创建连接配置
+            driver_config = self._create_driver_config(neo4j_config)
+            
+            self.driver = GD.driver(f"{uri}/{self.kgdb_name}", auth=(username, password), **driver_config)
             self.status = "open"
+            
+            # 测试连接
+            self._test_connection()
+            
             logger.info(f"Connected to Neo4j: {self.get_graph_info(self.kgdb_name)}")
             # 连接成功后保存图数据库信息
             self.save_graph_info(self.kgdb_name)
         except Exception as e:
-            logger.error(f"Failed to connect to Neo4j: {e}, {uri}, {self.kgdb_name}, {username}, {password}")
+            logger.error(f"Failed to connect to Neo4j: {e}, {uri}, {self.kgdb_name}, {username}")
+            self.status = "closed"
 
+    def _get_neo4j_config(self) -> dict:
+        """获取Neo4j配置"""
+        try:
+            neo4j_config = config.get_database_config('neo4j')
+            logger.info(f"Neo4j config loaded: {neo4j_config.get('uri')}")
+            return neo4j_config
+        except Exception as e:
+            logger.warning(f"Failed to load Neo4j config, using environment variables: {e}")
+            # 回退到环境变量
+            return {
+                'uri': os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
+                'username': os.environ.get("NEO4J_USERNAME", "neo4j"),
+                'password': os.environ.get("NEO4J_PASSWORD", "0123456789"),
+                'encrypted': False,
+                'trust': 'TRUST_ALL_CERTIFICATES',
+                'connection_timeout': 30,
+                'max_connection_lifetime': 3600,
+                'max_connection_pool_size': 100,
+                'connection_acquisition_timeout': 60
+            }
+    
+    def _create_driver_config(self, neo4j_config: dict) -> dict:
+        """创建驱动器配置"""
+        driver_config = {}
+        
+        # 加密配置
+        if 'encrypted' in neo4j_config:
+            driver_config['encrypted'] = neo4j_config['encrypted']
+        
+        # 信任配置
+        if 'trust' in neo4j_config:
+            try:
+                from neo4j import TrustStrategy
+                trust_value = neo4j_config['trust']
+                if trust_value == 'TRUST_ALL_CERTIFICATES':
+                    driver_config['trust'] = TrustStrategy.trust_all_certificates()
+                elif trust_value == 'TRUST_SYSTEM_CA_SIGNED_CERTIFICATES':
+                    driver_config['trust'] = TrustStrategy.trust_system_ca_signed_certificates()
+            except ImportError:
+                logger.warning("TrustStrategy not available, skipping trust configuration")
+        
+        # 连接超时
+        if 'connection_timeout' in neo4j_config:
+            driver_config['connection_timeout'] = neo4j_config['connection_timeout']
+        
+        # 连接生命周期
+        if 'max_connection_lifetime' in neo4j_config:
+            driver_config['max_connection_lifetime'] = neo4j_config['max_connection_lifetime']
+        
+        # 连接池大小
+        if 'max_connection_pool_size' in neo4j_config:
+            driver_config['max_connection_pool_size'] = neo4j_config['max_connection_pool_size']
+        
+        # 连接获取超时
+        if 'connection_acquisition_timeout' in neo4j_config:
+            driver_config['connection_acquisition_timeout'] = neo4j_config['connection_acquisition_timeout']
+        
+        return driver_config
+    
+    def _test_connection(self):
+        """测试连接"""
+        try:
+            with self.driver.session() as session:
+                session.run("RETURN 1")
+            logger.info("Neo4j connection test successful")
+        except Exception as e:
+            logger.error(f"Neo4j connection test failed: {e}")
+            raise
+    
+    def health_check(self) -> dict:
+        """健康检查"""
+        try:
+            if self.driver and self.status == "open":
+                with self.driver.session() as session:
+                    result = session.run("CALL dbms.components() YIELD name, versions")
+                    components = list(result)
+                    return {
+                        'status': 'healthy',
+                        'database': self.kgdb_name,
+                        'components': components
+                    }
+            else:
+                return {
+                    'status': 'disconnected',
+                    'database': self.kgdb_name
+                }
+        except Exception as e:
+            return {
+                'status': 'error',
+                'database': self.kgdb_name,
+                'error': str(e)
+            }
+    
+    def get_connection_info(self) -> dict:
+        """获取连接信息"""
+        neo4j_config = self._get_neo4j_config()
+        return {
+            'uri': neo4j_config.get('uri'),
+            'username': neo4j_config.get('username'),
+            'database': self.kgdb_name,
+            'status': self.status,
+            'encrypted': neo4j_config.get('encrypted', False),
+            'pool_size': neo4j_config.get('max_connection_pool_size', 100)
+        }
+    
     def close(self):
         """关闭数据库连接"""
-        assert self.driver is not None, "Database is not connected"
-        self.driver.close()
+        if self.driver:
+            self.driver.close()
+            self.status = "closed"
+            logger.info(f"Disconnected from Neo4j: {self.kgdb_name}")
 
     def is_running(self):
         """检查图数据库是否正在运行"""
@@ -453,6 +572,14 @@ class GraphDatabase:
             # 获取所有标签
             labels = tx.run("CALL db.labels() YIELD label RETURN collect(label) AS labels").single()["labels"]
 
+            # 获取数据库统计信息
+            try:
+                store_info_result = tx.run("CALL dbms.queryJmx('org.neo4j:instance=kernel#0,name=Store file sizes')"
+                                         " YIELD attributes RETURN attributes")
+                store_info = list(store_info_result)
+            except Exception:
+                store_info = []
+
             return {
                 "graph_name": graph_name,
                 "entity_count": entity_count,
@@ -461,7 +588,9 @@ class GraphDatabase:
                 "labels": labels,
                 "status": self.status,
                 "embed_model_name": self.embed_model_name,
-                "unindexed_node_count": self.query_nodes_without_embedding(graph_name)
+                "unindexed_node_count": self.query_nodes_without_embedding(graph_name),
+                "store_info": store_info,
+                "connection_info": self.get_connection_info()
             }
 
         try:

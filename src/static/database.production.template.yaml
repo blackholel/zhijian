@@ -1,0 +1,107 @@
+# 生产环境数据库配置模板
+# 复制此文件为 database.production.yaml 并填入实际配置
+
+environments:
+  production:
+    # 服务器主数据库（用户、对话、知识库元数据等）
+    server_db:
+      type: postgresql
+      host: ${POSTGRES_HOST}                    # 生产环境PostgreSQL主机地址
+      port: ${POSTGRES_PORT:-5432}              # PostgreSQL端口，默认5432
+      database: ${POSTGRES_DB}                  # 数据库名称
+      username: ${POSTGRES_USER}                # 数据库用户名
+      password: ${POSTGRES_PASSWORD}            # 数据库密码
+      pool_size: ${POSTGRES_POOL_SIZE:-20}      # 连接池大小
+      max_overflow: ${POSTGRES_MAX_OVERFLOW:-50} # 最大溢出连接数
+      echo: false                               # 不在生产环境输出SQL日志
+      connect_timeout: 30                       # 连接超时时间（秒）
+      
+    # LightRAG知识库数据库
+    lightrag_db:
+      type: postgresql
+      host: ${LIGHTRAG_POSTGRES_HOST}           # LightRAG PostgreSQL主机地址
+      port: ${LIGHTRAG_POSTGRES_PORT:-5432}     # PostgreSQL端口
+      database: ${LIGHTRAG_POSTGRES_DB}         # LightRAG数据库名称
+      username: ${LIGHTRAG_POSTGRES_USER}       # LightRAG数据库用户名
+      password: ${LIGHTRAG_POSTGRES_PASSWORD}   # LightRAG数据库密码
+      pool_size: ${LIGHTRAG_POSTGRES_POOL_SIZE:-50}        # 连接池大小
+      max_overflow: ${LIGHTRAG_POSTGRES_MAX_OVERFLOW:-100} # 最大溢出连接数
+      echo: false                               # 不在生产环境输出SQL日志
+      connect_timeout: 30                       # 连接超时时间（秒）
+      
+    # Neo4j图数据库
+    neo4j:
+      uri: ${NEO4J_URI}                         # Neo4j连接URI，例如：bolt://neo4j.example.com:7687
+      username: ${NEO4J_USERNAME:-neo4j}        # Neo4j用户名
+      password: ${NEO4J_PASSWORD}               # Neo4j密码
+      encrypted: ${NEO4J_ENCRYPTED:-true}       # 是否启用加密连接
+      trust: ${NEO4J_TRUST:-TRUST_SYSTEM_CA_SIGNED_CERTIFICATES} # 证书信任策略
+      connection_timeout: 30                    # 连接超时时间（秒）
+      max_connection_lifetime: 3600             # 连接最大生命周期（秒）
+      max_connection_pool_size: ${NEO4J_POOL_SIZE:-100} # 连接池大小
+      connection_acquisition_timeout: 60       # 连接获取超时时间（秒）
+      
+    # Milvus向量数据库
+    milvus:
+      uri: ${MILVUS_URI}                        # Milvus连接URI，例如：http://milvus.example.com:19530
+      user: ${MILVUS_USER:-}                    # Milvus用户名（如果启用认证）
+      password: ${MILVUS_PASSWORD:-}            # Milvus密码（如果启用认证）
+      db_name: ${MILVUS_DB:-default}            # Milvus数据库名称
+      timeout: 30                               # 操作超时时间（秒）
+      
+    # MinIO对象存储
+    minio:
+      uri: ${MINIO_URI}                         # MinIO连接URI，例如：http://minio.example.com:9000
+      access_key: ${MINIO_ACCESS_KEY}           # MinIO访问密钥
+      secret_key: ${MINIO_SECRET_KEY}           # MinIO秘密密钥
+      secure: ${MINIO_SECURE:-true}             # 是否使用HTTPS
+      region: ${MINIO_REGION:-us-east-1}        # MinIO区域
+
+# 默认环境配置
+default_environment: production
+
+# 连接重试配置
+retry_config:
+  max_retries: 5                              # 最大重试次数
+  retry_delay: 2                              # 重试延迟（秒）
+  backoff_factor: 2                           # 重试退避因子
+
+# 健康检查配置
+health_check:
+  enabled: true                               # 启用健康检查
+  interval: 30                                # 健康检查间隔（秒）
+  timeout: 5                                  # 健康检查超时时间（秒）
+  
+# 日志配置
+logging:
+  level: WARNING                              # 生产环境使用WARNING级别
+  log_queries: false                          # 不记录查询日志
+  log_slow_queries: true                      # 记录慢查询
+  slow_query_threshold: 2.0                   # 慢查询阈值（秒）
+
+# 性能优化配置
+performance:
+  # PostgreSQL优化
+  postgres:
+    statement_timeout: 30000                  # 语句超时时间（毫秒）
+    idle_in_transaction_session_timeout: 600000 # 事务空闲超时（毫秒）
+    
+  # Neo4j优化
+  neo4j:
+    tx_timeout: 30000                         # 事务超时时间（毫秒）
+    
+  # Milvus优化
+  milvus:
+    search_timeout: 10                        # 搜索超时时间（秒）
+    batch_size: 1000                          # 批量操作大小
+
+# 监控配置
+monitoring:
+  enabled: true                               # 启用监控
+  metrics_endpoint: "/metrics"                # 监控指标端点
+  
+# 安全配置
+security:
+  ssl_required: true                          # 要求SSL连接
+  password_encryption: true                   # 密码加密存储
+  audit_logging: true                         # 启用审计日志

@@ -2,9 +2,123 @@ import os
 import json
 import yaml
 from pathlib import Path
+from typing import Dict, Any, Optional
 from src.utils.logging_config import logger
 
 DEFAULT_MOCK_API = 'this_is_mock_api_key_in_frontend'
+
+class DatabaseConfig:
+    """数据库配置管理类"""
+    
+    def __init__(self, config_path: str = None):
+        self.config_path = config_path or str(Path("src/static/database.yaml"))
+        self.config_data = {}
+        self.current_environment = "development"
+        self.load_config()
+    
+    def load_config(self):
+        """加载数据库配置"""
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    self.config_data = yaml.safe_load(f)
+                
+                # 设置当前环境
+                self.current_environment = os.getenv('ENVIRONMENT', 
+                                                    self.config_data.get('default_environment', 'development'))
+                
+                logger.info(f"Loaded database config from {self.config_path}, environment: {self.current_environment}")
+            else:
+                logger.warning(f"Database config file not found: {self.config_path}")
+                self.config_data = self._get_default_config()
+        except Exception as e:
+            logger.error(f"Error loading database config: {e}")
+            self.config_data = self._get_default_config()
+    
+    def _get_default_config(self):
+        """获取默认配置"""
+        return {
+            'environments': {
+                'development': {
+                    'server_db': {
+                        'type': 'postgresql',
+                        'host': 'localhost',
+                        'port': 5432,
+                        'database': 'yuxi_dev',
+                        'username': 'yuxi_user',
+                        'password': 'yuxi_password',
+                        'pool_size': 10,
+                        'max_overflow': 20
+                    }
+                }
+            },
+            'default_environment': 'development'
+        }
+    
+    def get_db_config(self, db_name: str) -> Dict[str, Any]:
+        """获取指定数据库的配置"""
+        env_config = self.config_data.get('environments', {}).get(self.current_environment, {})
+        db_config = env_config.get(db_name, {})
+        
+        # 处理环境变量替换
+        return self._resolve_env_variables(db_config)
+    
+    def _resolve_env_variables(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """解析环境变量"""
+        resolved_config = {}
+        for key, value in config.items():
+            if isinstance(value, str) and value.startswith('${') and value.endswith('}'):
+                # 处理环境变量格式 ${VAR_NAME:-default_value}
+                env_expr = value[2:-1]  # 去掉 ${ 和 }
+                if ':-' in env_expr:
+                    var_name, default_value = env_expr.split(':-', 1)
+                    resolved_config[key] = os.getenv(var_name, default_value)
+                else:
+                    resolved_config[key] = os.getenv(env_expr, value)
+            else:
+                resolved_config[key] = value
+        return resolved_config
+    
+    def get_connection_string(self, db_name: str) -> str:
+        """获取数据库连接字符串"""
+        config = self.get_db_config(db_name)
+        db_type = config.get('type', 'postgresql')
+        
+        if db_type == 'postgresql':
+            return f"postgresql://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}"
+        elif db_type == 'sqlite':
+            return f"sqlite:///{config.get('path', 'database.db')}"
+        else:
+            raise ValueError(f"Unsupported database type: {db_type}")
+    
+    def validate_config(self, db_name: str) -> bool:
+        """验证数据库配置"""
+        try:
+            config = self.get_db_config(db_name)
+            required_fields = ['type', 'host', 'port', 'database', 'username', 'password']
+            
+            for field in required_fields:
+                if field not in config or not config[field]:
+                    logger.error(f"Missing required field '{field}' in {db_name} config")
+                    return False
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error validating {db_name} config: {e}")
+            return False
+    
+    def set_environment(self, environment: str):
+        """设置当前环境"""
+        if environment in self.config_data.get('environments', {}):
+            self.current_environment = environment
+            logger.info(f"Environment set to: {environment}")
+        else:
+            logger.warning(f"Environment '{environment}' not found in config")
+    
+    def get_all_db_names(self) -> list:
+        """获取所有数据库名称"""
+        env_config = self.config_data.get('environments', {}).get(self.current_environment, {})
+        return list(env_config.keys())
 
 class SimpleConfig(dict):
 
@@ -42,6 +156,10 @@ class Config(SimpleConfig):
         self.save_dir = os.getenv('SAVE_DIR', 'saves')
         self.filename = str(Path(f"{self.save_dir}/config/base.yaml"))
         os.makedirs(os.path.dirname(self.filename), exist_ok=True)
+        
+        # 初始化数据库配置
+        self.database = DatabaseConfig()
+        logger.info(f"Database config initialized with environment: {self.database.current_environment}")
 
         self._update_models_from_file()
 
@@ -205,3 +323,32 @@ class Config(SimpleConfig):
                     value[i]["api_key"] = current_api_key
 
         return value
+    
+    def get_database_config(self, db_name: str) -> Dict[str, Any]:
+        """获取数据库配置"""
+        return self.database.get_db_config(db_name)
+    
+    def get_database_connection_string(self, db_name: str) -> str:
+        """获取数据库连接字符串"""
+        return self.database.get_connection_string(db_name)
+    
+    def validate_database_config(self, db_name: str) -> bool:
+        """验证数据库配置"""
+        return self.database.validate_config(db_name)
+    
+    def set_database_environment(self, environment: str):
+        """设置数据库环境"""
+        self.database.set_environment(environment)
+    
+    def get_all_database_names(self) -> list:
+        """获取所有数据库名称"""
+        return self.database.get_all_db_names()
+    
+    def is_database_available(self, db_name: str) -> bool:
+        """检查数据库配置是否可用"""
+        try:
+            config = self.database.get_db_config(db_name)
+            return bool(config and config.get('host') and config.get('database'))
+        except Exception as e:
+            logger.error(f"Error checking database availability for {db_name}: {e}")
+            return False
