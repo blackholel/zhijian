@@ -231,6 +231,236 @@ OPENAI_API_KEY=your_openai_key      # OpenAI模型
 DEEPSEEK_API_KEY=your_deepseek_key  # DeepSeek模型
 ```
 
+## RBAC权限管理系统
+
+### 权限系统概述
+系统已实现完整的基于角色的访问控制（RBAC）系统，支持外部JWT认证和细粒度权限管理。
+
+### 系统架构
+- **权限模型**: 用户 → 角色 → 权限的分层授权模式
+- **认证方式**: 外部JWT Token认证，支持多种认证源
+- **权限缓存**: Redis缓存用户权限，提升验证性能
+- **动态分配**: 基于用户身份自动分配适当角色
+
+### 核心组件
+
+#### 数据库模型
+```
+- users: 用户信息表
+- roles: 角色定义表  
+- permissions: 权限定义表
+- user_roles: 用户角色关联表
+- role_permissions: 角色权限关联表
+```
+
+#### 权限中间件
+- **位置**: `server/utils/rbac_middleware.py`
+- **功能**: JWT解析、用户认证、权限验证
+- **依赖注入**: 与FastAPI完美集成
+
+#### 外部JWT处理
+- **位置**: `server/utils/external_jwt_processor.py`
+- **功能**: 
+  - 解析外部JWT Token
+  - 用户信息同步到本地数据库
+  - 智能角色分配
+
+#### 系统初始化
+- **位置**: `server/utils/rbac_init.py`
+- **功能**: 
+  - 创建系统角色和权限
+  - 数据库表结构初始化
+  - 默认数据填充
+
+### 系统角色
+
+| 角色 | 英文名 | 权限描述 |
+|------|--------|---------|
+| 超级管理员 | `superadmin` | 拥有所有权限(`*:*`) |
+| 管理员 | `admin` | 用户管理、知识库管理等核心权限 |
+| 高级用户 | `power_user` | 知识库和对话管理权限 |
+| 普通用户 | `user` | 基本使用权限 |
+
+### 权限类别
+
+#### 用户管理
+- `user:read` - 查看用户
+- `user:create` - 创建用户
+- `user:update` - 更新用户
+- `user:delete` - 删除用户
+- `user:grant_role` - 分配角色
+- `user:revoke_role` - 撤销角色
+
+#### 角色管理
+- `role:read` - 查看角色
+- `role:create` - 创建角色
+- `role:update` - 更新角色
+- `role:delete` - 删除角色
+- `role:grant_permission` - 分配权限
+- `role:revoke_permission` - 撤销权限
+
+#### 知识库管理
+- `kb:read` - 查看知识库
+- `kb:create` - 创建知识库
+- `kb:update` - 更新知识库
+- `kb:delete` - 删除知识库
+- `kb:upload` - 上传文档
+
+#### 系统管理
+- `system:read` - 查看系统信息
+- `system:config` - 系统配置
+- `system:restart` - 重启系统
+- `system:logs` - 查看日志
+
+### 智能角色分配
+
+系统支持基于用户身份的智能角色分配：
+
+#### 超级管理员用户
+自动分配`superadmin`角色的用户：
+- `admin`, `root`, `administrator`
+- `rf_sjz` (瑞飞数据组)
+- JWT Scope包含`superadmin`或`admin`的用户
+
+#### 管理员用户  
+自动分配`admin`角色的用户：
+- `manager`, `admin_user`
+- JWT Scope包含`manager`的用户
+
+#### 默认角色
+其他用户默认分配`user`角色
+
+### JWT Token管理
+
+#### 生成Token工具
+```bash
+# 生成超级管理员token
+python generate_token.py admin
+
+# 生成指定用户token
+python generate_token.py user <user_id> <username> [display_name]
+
+# 解析token信息
+python generate_token.py decode <token>
+```
+
+#### 当前管理员用户Token
+
+**admin用户**:
+```
+用户ID: admin
+权限: 超级管理员(*:*)
+```
+
+**rf_sjz用户**:
+```
+用户ID: bpaooawkyt2h5g5h9dza7rl3
+用户名: rf_sjz
+组织: ORGASZ100011287 (瑞飞数据组)
+权限: 超级管理员(*:*)
+```
+
+### API接口
+
+#### RBAC管理接口
+- `GET /api/rbac/roles` - 获取角色列表
+- `POST /api/rbac/roles` - 创建角色
+- `PUT /api/rbac/roles/{id}` - 更新角色
+- `DELETE /api/rbac/roles/{id}` - 删除角色
+
+- `GET /api/rbac/permissions` - 获取权限列表
+- `POST /api/rbac/permissions` - 创建权限
+
+- `POST /api/rbac/user-roles` - 分配用户角色
+- `DELETE /api/rbac/user-roles/{user_id}/{role_id}` - 撤销用户角色
+
+- `GET /api/rbac/users/{user_id}/permissions` - 查看用户权限
+- `GET /api/rbac/roles/{role_id}/permissions` - 查看角色权限
+
+### 开发集成
+
+#### 权限验证装饰器
+```python
+from server.utils.rbac_middleware import require_permission
+
+@router.get("/protected-endpoint")
+async def protected_function(
+    current_user: User = Depends(require_permission("resource:action")),
+    db: Session = Depends(get_db)
+):
+    # 业务逻辑
+    pass
+```
+
+#### 权限检查
+```python
+# 在业务逻辑中检查权限
+has_permission = await rbac_middleware.verify_permission(user, "resource:action", db)
+if not has_permission:
+    raise HTTPException(status_code=403, detail="权限不足")
+```
+
+### 系统初始化
+
+#### 首次部署
+```bash
+# 初始化RBAC系统（创建角色、权限）
+python -c "
+import sys
+sys.path.append('/home/Projects/Yuxi-Know-main')
+from server.utils.rbac_init import init_rbac_system
+init_rbac_system()
+"
+
+# 创建默认管理员用户
+python generate_token.py admin
+```
+
+#### 权限缓存管理
+```bash
+# 清除用户权限缓存
+python -c "
+from server.utils.redis_manager import get_permission_cache
+cache = get_permission_cache()
+cache.invalidate_user_permissions('user_id')
+cache.invalidate_all_user_permissions()
+"
+```
+
+### 故障排除
+
+#### 常见问题
+
+1. **401 Unauthorized**
+   - 检查JWT Token是否有效
+   - 确认用户在数据库中存在
+   - 验证Token格式正确
+
+2. **403 Forbidden** 
+   - 检查用户角色分配
+   - 确认角色拥有所需权限
+   - 清除权限缓存重试
+
+3. **422 Unprocessable Entity**
+   - 检查API参数格式
+   - 确认依赖注入配置正确
+   - 验证装饰器使用方式
+
+#### 调试命令
+
+```bash
+# 检查用户权限
+curl -H "Authorization: Bearer <token>" \
+     http://localhost:5050/api/rbac/users/<user_id>/permissions
+
+# 测试权限接口
+curl -H "Authorization: Bearer <token>" \
+     http://localhost:5050/api/rbac/roles
+
+# 查看系统日志
+tail -f server.log
+```
+
 ## 重要开发原则
 
 ### 代码规范
