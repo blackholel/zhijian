@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from server.routers import router
-from server.utils.auth_middleware import is_public_path
+from server.auth.auth_middleware import is_public_path
 from src.utils.logging_config import logger
 
 

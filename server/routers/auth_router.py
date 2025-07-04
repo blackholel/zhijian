@@ -7,7 +7,7 @@ from datetime import datetime
 from server.db_manager import db_manager
 from server.models.user_model import User, OperationLog
 from server.utils.auth_utils import AuthUtils
-from server.utils.auth_middleware import get_db, get_current_user, get_admin_user, get_superadmin_user, oauth2_scheme
+from server.auth.auth_middleware import get_db, get_current_user, get_admin_user, get_superadmin_user, oauth2_scheme
 
 # 创建路由器
 auth = APIRouter(prefix="/auth", tags=["auth"])

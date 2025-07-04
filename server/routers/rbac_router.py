@@ -8,7 +8,7 @@ import logging
 
 from server.db_manager import db_manager
 from server.models.user_model import User, Role, Permission, UserRole, RolePermission
-from server.utils.rbac_middleware import get_required_user, require_permission, rbac_middleware
+from server.auth.rbac_middleware import get_required_user, require_permission, rbac_middleware
 from server.utils.redis_manager import get_permission_cache
 from pydantic import BaseModel
 

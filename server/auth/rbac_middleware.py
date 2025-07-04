@@ -7,7 +7,7 @@ import logging
 
 from server.db_manager import db_manager
 from server.models.user_model import User
-from server.utils.external_jwt_processor import ExternalJWTProcessor, JWTAuthenticationError
+from server.auth.external_jwt_processor import ExternalJWTProcessor, JWTAuthenticationError
 from server.utils.redis_manager import get_permission_cache
 
 logger = logging.getLogger(__name__)

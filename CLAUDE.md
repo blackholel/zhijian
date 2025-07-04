@@ -354,7 +354,7 @@ python generate_token.py decode <token>
 
 #### 权限验证装饰器
 ```python
-from server.utils.rbac_middleware import require_permission
+from server.auth.rbac_middleware import require_permission
 
 @router.get("/protected-endpoint")
 async def protected_function(
@@ -381,7 +381,7 @@ if not has_permission:
 python -c "
 import sys
 sys.path.append('/home/Projects/Yuxi-Know-main')
-from server.utils.rbac_init import init_rbac_system
+from server.auth.rbac_init import init_rbac_system
 init_rbac_system()
 "
 
