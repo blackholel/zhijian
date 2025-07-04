@@ -128,12 +128,6 @@ pnpm dev
 - 数据库模型位于 `server/models/`
 - API路由位于 `server/routers/`
 
-### 前端组件开发
-- Vue.js 3组合式API
-- Pinia状态管理位于 `web/src/stores/`
-- 组件组织位于 `web/src/components/`
-- API客户端位于 `web/src/apis/`
-
 ### 代理开发
 - 扩展 `src/agents/` 中的基础代理类
 - 在 `src/agents/tools_factory.py` 中定义工具
@@ -162,28 +156,7 @@ pnpm dev
 2. 根据需要创建迁移脚本
 3. 更新 `server/routers/` 中的API端点
 
-## 前端开发命令
 
-### Web目录操作
-```bash
-# 进入前端目录
-cd web
-
-# 安装依赖
-pnpm install
-
-# 启动开发服务器
-pnpm dev
-
-# 构建生产版本
-pnpm build
-
-# 类型检查
-pnpm type-check
-
-# 代码检查
-pnpm lint
-```
 
 ## 后端开发命令
 
