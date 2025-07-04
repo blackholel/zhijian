@@ -1,6 +1,6 @@
 import os
 import pathlib
-from sqlalchemy import create_engine, event, pool
+from sqlalchemy import create_engine, event, pool, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import Engine
 from contextlib import contextmanager
@@ -86,7 +86,7 @@ class DBManager:
         """测试数据库连接"""
         try:
             with self.engine.connect() as conn:
-                conn.execute("SELECT 1")
+                conn.execute(text("SELECT 1"))
             logger.info("Database connection test successful")
         except Exception as e:
             logger.error(f"Database connection test failed: {e}")
@@ -111,7 +111,7 @@ class DBManager:
         """健康检查"""
         try:
             with self.engine.connect() as conn:
-                conn.execute("SELECT 1")
+                conn.execute(text("SELECT 1"))
             return True
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
@@ -189,7 +189,7 @@ class DBManager:
         """执行原始SQL语句"""
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(sql, params or {})
+                result = conn.execute(text(sql), params or {})
                 return result
         except Exception as e:
             logger.error(f"Failed to execute raw SQL: {e}")

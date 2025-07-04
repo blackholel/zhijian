@@ -85,7 +85,11 @@ class DatabaseConfig:
         db_type = config.get('type', 'postgresql')
         
         if db_type == 'postgresql':
-            return f"postgresql://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}"
+            from urllib.parse import quote_plus
+            # 对用户名和密码进行URL编码以处理特殊字符（如@符号）
+            encoded_username = quote_plus(str(config['username']))
+            encoded_password = quote_plus(str(config['password']))
+            return f"postgresql://{encoded_username}:{encoded_password}@{config['host']}:{config['port']}/{config['database']}"
         elif db_type == 'sqlite':
             return f"sqlite:///{config.get('path', 'database.db')}"
         else:

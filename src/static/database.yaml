@@ -8,9 +8,9 @@ environments:
       type: postgresql
       host: localhost
       port: 5432
-      database: yuxi_dev
-      username: yuxi_user
-      password: yuxi_password
+      database: xm
+      username: postgres
+      password: "fa6Z363@3bc6af5134"
       pool_size: 10
       max_overflow: 20
       echo: false
@@ -21,9 +21,9 @@ environments:
       type: postgresql
       host: localhost
       port: 5432
-      database: lightrag_dev
-      username: lightrag_user
-      password: lightrag_password
+      database: lightrag
+      username: postgres
+      password: "fa6Z363@3bc6af5134"
       pool_size: 50
       max_overflow: 100
       echo: false
@@ -33,7 +33,7 @@ environments:
     neo4j:
       uri: bolt://localhost:7687
       username: neo4j
-      password: neo4j_password
+      password: "A620250234Neo4j"
       encrypted: false
       trust: TRUST_ALL_CERTIFICATES
       connection_timeout: 30
@@ -44,18 +44,30 @@ environments:
     # Milvus向量数据库
     milvus:
       uri: http://localhost:19530
-      user: ""
-      password: ""
+      user: "root"
+      password: "A6pgsql20200624"
       db_name: "default"
       timeout: 30
       
     # MinIO对象存储
     minio:
-      uri: http://localhost:9000
+      uri: http://localhost:9001
       access_key: minioadmin
-      secret_key: minioadmin
+      secret_key: A6pgsql20200624
       secure: false
-      region: us-east-1
+      region: 
+      
+    # Redis缓存数据库
+    redis:
+      host: localhost
+      port: 6379
+      password: "A6pgsql202#00624"
+      db: 0
+      max_connections: 20
+      connection_timeout: 30
+      socket_timeout: 30
+      retry_on_timeout: true
+      decode_responses: true
       
   test:
     # 测试环境配置
@@ -102,11 +114,22 @@ environments:
       timeout: 30
       
     minio:
-      uri: http://localhost:9000
+      uri: http://localhost:9001
       access_key: minioadmin
-      secret_key: minioadmin
+      secret_key: A6pgsql20200624
       secure: false
-      region: us-east-1
+      region: 
+      
+    redis:
+      host: localhost
+      port: 6379
+      password: ""
+      db: 1
+      max_connections: 10
+      connection_timeout: 30
+      socket_timeout: 30
+      retry_on_timeout: true
+      decode_responses: true
 
   production:
     # 生产环境配置 - 使用环境变量
@@ -158,6 +181,17 @@ environments:
       secret_key: ${MINIO_SECRET_KEY:-minioadmin}
       secure: ${MINIO_SECURE:-false}
       region: ${MINIO_REGION:-us-east-1}
+      
+    redis:
+      host: ${REDIS_HOST:-redis}
+      port: ${REDIS_PORT:-6379}
+      password: ${REDIS_PASSWORD:-}
+      db: ${REDIS_DB:-0}
+      max_connections: ${REDIS_MAX_CONNECTIONS:-50}
+      connection_timeout: ${REDIS_CONNECTION_TIMEOUT:-30}
+      socket_timeout: ${REDIS_SOCKET_TIMEOUT:-30}
+      retry_on_timeout: ${REDIS_RETRY_ON_TIMEOUT:-true}
+      decode_responses: ${REDIS_DECODE_RESPONSES:-true}
 
 # 默认环境配置
 default_environment: development
