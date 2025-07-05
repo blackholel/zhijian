@@ -4,7 +4,7 @@ import asyncio
 import traceback
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Query, HTTPException, Depends
-from server.auth.auth_middleware import get_admin_user
+from server.auth.rbac_middleware import get_admin_user
 from server.models.user_model import User
 
 from src import knowledge_base

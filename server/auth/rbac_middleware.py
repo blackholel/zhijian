@@ -65,9 +65,11 @@ class RBACMiddleware:
         
         try:
             # 使用外部JWT处理器获取用户
+            logger.debug(f"Processing JWT token for authentication")
             user = ExternalJWTProcessor.get_user_from_token(token, db)
             
             if not user:
+                logger.warning(f"JWT token processing returned no user")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="无效的用户token",

@@ -1,4 +1,6 @@
 import uvicorn
+import asyncio
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,10 +9,38 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from server.routers import router
 from server.auth.auth_middleware import is_public_path
+from server.auth.rbac_middleware import rbac_middleware
+from server.auth.permission_framework import initialize_permission_framework, shutdown_permission_framework
 from src.utils.logging_config import logger
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # 启动时执行
+    try:
+        logger.info("Initializing permission framework...")
+        await initialize_permission_framework(
+            rbac_middleware,
+            enable_cache=True,
+            enable_audit=True,
+            enable_performance_monitoring=True
+        )
+        logger.info("Permission framework initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize permission framework: {e}")
+        raise
+    
+    yield  # 应用运行期间
+    
+    # 关闭时执行
+    try:
+        logger.info("Shutting down permission framework...")
+        await shutdown_permission_framework()
+        logger.info("Permission framework shutdown successfully")
+    except Exception as e:
+        logger.error(f"Error shutting down permission framework: {e}")
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.include_router(router, prefix="/api")
 
 # CORS 设置

@@ -5,32 +5,42 @@ from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Body, F
 
 from src.utils import logger, hashstr
 from src import executor, config, knowledge_base, graph_base
-from server.auth.auth_middleware import get_admin_user
+from server.auth.rbac_middleware import get_required_user, get_admin_user
+from server.auth.permission_framework import (
+    require_kb_permission, require_system_permission, Permission
+)
 from server.models.user_model import User
 
 data = APIRouter(prefix="/data")
 
+def get_user_id(user: User) -> str:
+    """获取用户ID，优先使用external_user_id（外部JWT用户）"""
+    return getattr(user, 'external_user_id', None) or str(user.id)
+
 
 @data.get("/")
-async def get_databases(current_user: User = Depends(get_admin_user)):
+@require_system_permission(Permission.READ)
+async def get_databases(current_user: User = Depends(get_required_user)):
     try:
-        database = knowledge_base.get_databases()
+        database = await knowledge_base.get_databases(get_user_id(current_user))
     except Exception as e:
         logger.error(f"获取数据库列表失败 {e}, {traceback.format_exc()}")
         return {"message": f"获取数据库列表失败 {e}", "databases": []}
     return database
 
 @data.post("/")
+@require_system_permission(Permission.CREATE)
 async def create_database(
     database_name: str = Body(...),
     description: str = Body(...),
     embed_model_name: str = Body(...),
-    current_user: User = Depends(get_admin_user)
+    current_user: User = Depends(get_required_user)
 ):
     logger.debug(f"Create database {database_name}")
     try:
         embed_info = config.embed_model_names[embed_model_name]
-        database_info = knowledge_base.create_database(
+        database_info = await knowledge_base.create_database(
+            get_user_id(current_user),
             database_name,
             description,
             embed_info=embed_info
@@ -41,19 +51,42 @@ async def create_database(
     return database_info
 
 @data.delete("/")
-async def delete_database(db_id, current_user: User = Depends(get_admin_user)):
+@require_kb_permission(Permission.DELETE, "db_id")
+async def delete_database(db_id, current_user: User = Depends(get_required_user)):
     logger.debug(f"Delete database {db_id}")
-    knowledge_base.delete_database(db_id)
+    await knowledge_base.delete_database(get_user_id(current_user), db_id)
     return {"message": "删除成功"}
 
 @data.post("/query-test")
-async def query_test(query: str = Body(...), meta: dict = Body(...), current_user: User = Depends(get_admin_user)):
+async def query_test(query: str = Body(...), meta: dict = Body(...), current_user: User = Depends(get_required_user)):
     logger.debug(f"Query test in {meta}: {query}")
-    result = await knowledge_base.aquery(query, **meta)
+    db_id = meta.get("db_id")
+    
+    # 动态权限检查
+    if db_id:
+        from server.auth.permission_framework import PermissionEngine, KnowledgeBaseResource, Permission, PermissionContext
+        from datetime import datetime
+        
+        engine = PermissionEngine.get_instance()
+        resource = KnowledgeBaseResource(db_id)
+        context = PermissionContext(
+            user_id=get_user_id(current_user),
+            resource=resource,
+            permission=Permission.READ,
+            request_metadata={"endpoint": "query_test", "method": "POST"},
+            timestamp=datetime.now()
+        )
+        
+        result_check = await engine.check_permission(context)
+        if not result_check.allowed:
+            raise HTTPException(403, f"Permission denied: {result_check.reason}")
+    
+    result = await knowledge_base.aquery(get_user_id(current_user), query, db_id, **meta)
     return result
 
 @data.post("/add-files")
-async def add_files(db_id: str = Body(...), items: list[str] = Body(...), params: dict = Body(...), current_user: User = Depends(get_admin_user)):
+@require_kb_permission(Permission.WRITE, "db_id")
+async def add_files(db_id: str = Body(...), items: list[str] = Body(...), params: dict = Body(...), current_user: User = Depends(get_required_user)):
     logger.debug(f"Add files/urls for db_id {db_id}: {items} {params=}")
 
     # 从 params 中获取 content_type，默认为 'file'
@@ -61,7 +94,7 @@ async def add_files(db_id: str = Body(...), items: list[str] = Body(...), params
 
     try:
         # 使用统一的 add_content 方法
-        processed_items = await knowledge_base.add_content(db_id, items, params=params)
+        processed_items = await knowledge_base.add_content(get_user_id(current_user), db_id, items, params=params)
 
         item_type = "URLs" if content_type == 'url' else "files"
         processed_failed_count = len([_p for _p in processed_items if _p['status'] == 'failed'])
@@ -94,25 +127,28 @@ async def add_by_chunks(db_id: str = Body(...), file_chunks: dict = Body(...), c
     raise ValueError("This method is deprecated. Use /add-files instead.")
 
 @data.get("/info")
-async def get_database_info(db_id: str, current_user: User = Depends(get_admin_user)):
+@require_kb_permission(Permission.READ, "db_id")
+async def get_database_info(db_id: str, current_user: User = Depends(get_required_user)):
     # logger.debug(f"Get database {db_id} info")
-    database = knowledge_base.get_database_info(db_id)
+    database = await knowledge_base.get_database_info(get_user_id(current_user), db_id)
     if database is None:
         raise HTTPException(status_code=404, detail="Database not found")
     return database
 
 @data.delete("/document")
-async def delete_document(db_id: str = Body(...), file_id: str = Body(...), current_user: User = Depends(get_admin_user)):
+@require_kb_permission(Permission.WRITE, "db_id")
+async def delete_document(db_id: str = Body(...), file_id: str = Body(...), current_user: User = Depends(get_required_user)):
     logger.debug(f"DELETE document {file_id} info in {db_id}")
-    await knowledge_base.delete_file(db_id, file_id)
+    await knowledge_base.delete_file(get_user_id(current_user), db_id, file_id)
     return {"message": "删除成功"}
 
 @data.get("/document")
-async def get_document_info(db_id: str, file_id: str, current_user: User = Depends(get_admin_user)):
+@require_kb_permission(Permission.READ, "db_id")
+async def get_document_info(db_id: str, file_id: str, current_user: User = Depends(get_required_user)):
     logger.debug(f"GET document {file_id} info in {db_id}")
 
     try:
-        info = await knowledge_base.get_file_info(db_id, file_id)
+        info = await knowledge_base.get_file_info(get_user_id(current_user), db_id, file_id)
     except Exception as e:
         logger.error(f"Failed to get file info, {e}, {db_id=}, {file_id=}, {traceback.format_exc()}")
         info = {"message": "Failed to get file info", "status": "failed"}
@@ -120,10 +156,11 @@ async def get_document_info(db_id: str, file_id: str, current_user: User = Depen
     return info
 
 @data.post("/upload")
+@require_system_permission(Permission.WRITE)
 async def upload_file(
     file: UploadFile = File(...),
     db_id: str | None = Query(None),
-    current_user: User = Depends(get_admin_user)
+    current_user: User = Depends(get_required_user)
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No selected file")
@@ -190,15 +227,16 @@ async def add_graph_entity(file_path: str = Body(...), kgdb_name: str | None = B
         return {"message": f"添加实体失败: {e}", "status": "failed"}
 
 @data.post("/update")
+@require_kb_permission(Permission.UPDATE, "db_id")
 async def update_database_info(
     db_id: str = Body(...),
     name: str = Body(...),
     description: str = Body(...),
-    current_user: User = Depends(get_admin_user)
+    current_user: User = Depends(get_required_user)
 ):
     logger.debug(f"Update database {db_id} info: {name}, {description}")
     try:
-        database = knowledge_base.update_database(db_id, name, description)
+        database = await knowledge_base.update_database(get_user_id(current_user), db_id, name, description)
         return {"message": "更新成功", "database": database}
     except Exception as e:
         logger.error(f"更新数据库失败 {e}, {traceback.format_exc()}")

@@ -16,8 +16,8 @@ from src.agents import agent_manager
 from src.models import select_model
 from src.utils.logging_config import logger
 from src.agents.tools_factory import get_all_tools
-from server.routers.auth_router import get_admin_user
-from server.auth.auth_middleware import get_required_user, get_db
+from server.auth.rbac_middleware import get_admin_user
+from server.auth.rbac_middleware import get_required_user, get_db
 from server.models.user_model import User
 from server.models.thread_model import Thread
 

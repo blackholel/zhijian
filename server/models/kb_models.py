@@ -1,7 +1,9 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, JSON, ForeignKey, Text, Boolean
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import time
+import uuid
 
 from server.models import Base
 
@@ -17,9 +19,16 @@ class KnowledgeDatabase(Base):
     dimension = Column(Integer, nullable=True)  # 向量维度
     meta_info = Column(JSON, nullable=True)  # 元数据
     created_at = Column(DateTime, default=func.now())  # 创建时间
+    
+    # 权限相关字段
+    owner_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)  # 知识库所有者
+    is_public = Column(Boolean, default=False)  # 是否公开
+    access_level = Column(String(20), default='private')  # private, shared, public
 
     # 关系
     files = relationship("KnowledgeFile", back_populates="database", cascade="all, delete-orphan")
+    owner = relationship("User", foreign_keys=[owner_id])
+    permissions = relationship("KnowledgeDatabasePermission", back_populates="database", cascade="all, delete-orphan")
 
     def to_dict(self, with_nodes=True):
         """转换为字典格式，确保meta_info映射为metadata"""
@@ -52,10 +61,14 @@ class KnowledgeFile(Base):
     file_type = Column(String, nullable=False)  # 文件类型
     status = Column(String, nullable=False)  # 处理状态
     created_at = Column(DateTime, default=func.now())  # 创建时间
+    
+    # 权限相关字段
+    uploaded_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)  # 上传者
 
     # 关系
     database = relationship("KnowledgeDatabase", back_populates="files")
     nodes = relationship("KnowledgeNode", back_populates="file", cascade="all, delete-orphan")
+    uploader = relationship("User", foreign_keys=[uploaded_by])
 
     @property
     def computed_node_count(self):
@@ -102,4 +115,33 @@ class KnowledgeNode(Base):
             "start_char_idx": self.start_char_idx,
             "end_char_idx": self.end_char_idx,
             "metadata": self.meta_info or {}  # 确保映射正确
+        }
+
+
+class KnowledgeDatabasePermission(Base):
+    """知识库权限模型 - 支持细粒度权限控制"""
+    __tablename__ = 'knowledge_database_permissions'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    database_id = Column(String, ForeignKey('knowledge_databases.db_id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    permission_type = Column(String(20), nullable=False)  # read, write, admin
+    granted_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
+    granted_at = Column(DateTime, default=func.now())
+    expires_at = Column(DateTime, nullable=True)
+    
+    # 关系
+    database = relationship("KnowledgeDatabase", back_populates="permissions")
+    user = relationship("User", foreign_keys=[user_id])
+    granter = relationship("User", foreign_keys=[granted_by])
+
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "database_id": self.database_id,
+            "user_id": str(self.user_id),
+            "permission_type": self.permission_type,
+            "granted_by": str(self.granted_by) if self.granted_by else None,
+            "granted_at": self.granted_at.isoformat() if self.granted_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None
         }

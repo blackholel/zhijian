@@ -15,19 +15,37 @@ class RedisManager:
     def __init__(self, redis_url: str = "redis://localhost:6379/0", password: str = None):
         """初始化Redis连接"""
         try:
-            self.redis = redis.Redis.from_url(
-                redis_url,
-                password=password,
-                decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-                retry_on_timeout=True
-            )
+            # 尝试连接Redis
+            if password:
+                self.redis = redis.Redis.from_url(
+                    redis_url,
+                    password=password,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                    retry_on_timeout=True
+                )
+            else:
+                # 无密码连接
+                self.redis = redis.Redis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                    retry_on_timeout=True
+                )
+            
             # 测试连接
             self.redis.ping()
             logger.info("Redis connection established successfully")
+        except redis.AuthenticationError:
+            logger.warning("Redis authentication failed, using fallback cache")
+            self.redis = FakeRedis()
+        except redis.ConnectionError:
+            logger.warning("Redis connection failed, using fallback cache")
+            self.redis = FakeRedis()
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            logger.warning(f"Failed to connect to Redis ({e}), using fallback cache")
             # 使用假的Redis实现作为fallback
             self.redis = FakeRedis()
     
@@ -139,14 +157,15 @@ class PermissionCache:
     def _query_user_permissions(self, user_id: str, db: Session) -> Set[str]:
         """从数据库查询用户权限"""
         try:
-            # 使用原生SQL查询以提高性能
+            # 使用原生SQL查询以提高性能 - 支持external_user_id
             query = text("""
                 SELECT DISTINCT p.name
                 FROM permissions p
                 JOIN role_permissions rp ON p.id = rp.permission_id
                 JOIN roles r ON rp.role_id = r.id
                 JOIN user_roles ur ON r.id = ur.role_id
-                WHERE ur.user_id = :user_id
+                JOIN users u ON ur.user_id = u.id
+                WHERE (u.external_user_id = :user_id OR u.id::text = :user_id OR u.username = :user_id)
                 AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
             """)
             

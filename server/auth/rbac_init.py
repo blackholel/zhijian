@@ -37,12 +37,22 @@ SYSTEM_PERMISSIONS = [
     ("permission:update", "更新权限", "permission", "update", "修改权限信息"),
     ("permission:delete", "删除权限", "permission", "delete", "删除权限"),
     
-    # 知识库管理
+    # 知识库管理（系统级）
     ("kb:read", "查看知识库", "knowledge_base", "read", "查看知识库内容"),
     ("kb:create", "创建知识库", "knowledge_base", "create", "创建新知识库"),
     ("kb:update", "更新知识库", "knowledge_base", "update", "修改知识库内容"),
     ("kb:delete", "删除知识库", "knowledge_base", "delete", "删除知识库"),
     ("kb:upload", "上传文档", "knowledge_base", "upload", "上传文档到知识库"),
+    ("kb:download", "下载文档", "knowledge_base", "download", "从知识库下载文档"),
+    ("kb:query", "查询知识库", "knowledge_base", "query", "查询知识库内容"),
+    ("kb:share", "共享知识库", "knowledge_base", "share", "共享知识库给其他用户"),
+    ("kb:manage_users", "管理知识库用户", "knowledge_base", "manage_users", "管理知识库用户权限"),
+    ("kb:view_logs", "查看知识库日志", "knowledge_base", "view_logs", "查看知识库操作日志"),
+    
+    # 知识库特定权限（资源级）
+    ("kb:read_specific", "读取特定知识库", "knowledge_base", "read_specific", "读取特定知识库内容"),
+    ("kb:write_specific", "写入特定知识库", "knowledge_base", "write_specific", "写入特定知识库内容"),
+    ("kb:admin_specific", "管理特定知识库", "knowledge_base", "admin_specific", "管理特定知识库权限"),
     
     # 对话管理
     ("chat:read", "查看对话", "chat", "read", "查看对话记录"),
@@ -94,7 +104,7 @@ SYSTEM_ROLES = [
         "permissions": [
             "user:read", "user:create", "user:update", "user:grant_role", "user:revoke_role",
             "role:read", "permission:read",
-            "kb:read", "kb:create", "kb:update", "kb:delete", "kb:upload",
+            "kb:read", "kb:create", "kb:update", "kb:delete", "kb:upload", "kb:download", "kb:query", "kb:share", "kb:manage_users", "kb:view_logs",
             "chat:read", "chat:create", "chat:update", "chat:delete",
             "agent:read", "agent:create", "agent:update", "agent:delete", "agent:execute",
             "system:read", "system:config", "system:logs",
@@ -107,7 +117,7 @@ SYSTEM_ROLES = [
         "display_name": "高级用户",
         "description": "拥有知识库和对话管理权限",
         "permissions": [
-            "kb:read", "kb:create", "kb:update", "kb:upload",
+            "kb:read", "kb:create", "kb:update", "kb:upload", "kb:download", "kb:query", "kb:share",
             "chat:read", "chat:create", "chat:update", "chat:delete",
             "agent:read", "agent:execute",
             "file:read", "file:upload", "file:download",
@@ -119,7 +129,7 @@ SYSTEM_ROLES = [
         "display_name": "普通用户",
         "description": "基本的使用权限",
         "permissions": [
-            "kb:read",
+            "kb:read", "kb:create", "kb:query",
             "chat:read", "chat:create",
             "agent:read", "agent:execute",
             "file:read",

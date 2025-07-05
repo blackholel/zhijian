@@ -223,6 +223,8 @@ class ExternalJWTProcessor:
     def get_user_from_token(token: str, db: Session) -> Optional[User]:
         """从token获取用户（带缓存）"""
         try:
+            logger.debug(f"Getting user from JWT token")
+            
             # 先尝试从缓存获取
             permission_cache = get_permission_cache()
             session_id = permission_cache.cache_jwt_session(token, {})  # 生成session_id
@@ -239,24 +241,31 @@ class ExternalJWTProcessor:
                     return user
             
             # 解析JWT获取用户信息
+            logger.debug(f"Decoding external JWT")
             jwt_payload = ExternalJWTProcessor.decode_external_jwt(token)
+            logger.debug(f"JWT payload: {jwt_payload}")
             
             # 同步用户信息
+            logger.debug(f"Syncing user from JWT")
             user = ExternalJWTProcessor.sync_user_from_jwt(jwt_payload, db)
+            logger.debug(f"User synced: {user.username if user else 'None'}")
             
-            # 缓存会话
-            permission_cache.cache_jwt_session(token, {
-                'user_id': user.external_user_id,
-                'username': user.username,
-                'display_name': user.display_name,
-                'organization': user.organization,
-                'region': user.region
-            })
+            if user:
+                # 缓存会话
+                permission_cache.cache_jwt_session(token, {
+                    'user_id': user.external_user_id,
+                    'username': user.username,
+                    'display_name': user.display_name,
+                    'organization': user.organization,
+                    'region': user.region
+                })
             
             return user
             
         except Exception as e:
             logger.error(f"Error processing external JWT: {e}")
+            import traceback
+            logger.error(f"JWT processing error traceback: {traceback.format_exc()}")
             return None
     
     @staticmethod
