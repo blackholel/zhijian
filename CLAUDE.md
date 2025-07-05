@@ -124,7 +124,8 @@ pnpm dev
 
 ### 后端API开发
 - 使用FastAPI异步模式
-- 认证中间件位于 `server/utils/auth_middleware.py`
+- **权限认证**: 统一使用 `server/auth/rbac_middleware.py` 进行JWT认证和权限验证
+- **权限框架**: 位于 `server/auth/permission_framework/` 的完整权限管理系统
 - 数据库模型位于 `server/models/`
 - API路由位于 `server/routers/`
 
@@ -227,19 +228,30 @@ DEEPSEEK_API_KEY=your_deepseek_key  # DeepSeek模型
 ```
 
 #### 权限中间件
-- **位置**: `server/utils/rbac_middleware.py`
+- **位置**: `server/auth/rbac_middleware.py`
 - **功能**: JWT解析、用户认证、权限验证
 - **依赖注入**: 与FastAPI完美集成
+- **外部JWT支持**: 自动处理外部JWT认证和用户同步
 
 #### 外部JWT处理
-- **位置**: `server/utils/external_jwt_processor.py`
+- **位置**: `server/auth/external_jwt_processor.py`
 - **功能**: 
-  - 解析外部JWT Token
+  - 解析外部JWT Token（支持RS256等多种签名算法）
   - 用户信息同步到本地数据库
-  - 智能角色分配
+  - 智能角色分配（rf_sjz等预定义用户）
+  - 权限缓存管理
+
+#### 新权限框架
+- **位置**: `server/auth/permission_framework/`
+- **功能**:
+  - 策略模式的权限检查系统
+  - 支持资源级细粒度权限控制
+  - 多层缓存（L1内存 + L2 Redis）
+  - 权限审计和性能监控
+  - 可扩展的权限策略
 
 #### 系统初始化
-- **位置**: `server/utils/rbac_init.py`
+- **位置**: `server/auth/rbac_init.py`
 - **功能**: 
   - 创建系统角色和权限
   - 数据库表结构初始化
@@ -278,6 +290,11 @@ DEEPSEEK_API_KEY=your_deepseek_key  # DeepSeek模型
 - `kb:update` - 更新知识库
 - `kb:delete` - 删除知识库
 - `kb:upload` - 上传文档
+- `kb:download` - 下载文档
+- `kb:query` - 查询知识库
+- `kb:share` - 共享知识库
+- `kb:manage_users` - 管理知识库用户
+- `kb:view_logs` - 查看知识库日志
 
 #### 系统管理
 - `system:read` - 查看系统信息
@@ -350,10 +367,17 @@ python generate_token.py decode <token>
 - `GET /api/rbac/users/{user_id}/permissions` - 查看用户权限
 - `GET /api/rbac/roles/{role_id}/permissions` - 查看角色权限
 
+#### 权限框架管理接口
+- `GET /api/permission-framework/status` - 查看权限框架状态
+- `POST /api/permission-framework/cache/invalidate` - 清除权限缓存
+- `GET /api/permission-framework/performance` - 查看性能监控
+- `GET /api/permission-framework/audit` - 查看权限审计日志
+
 ### 开发集成
 
 #### 权限验证装饰器
 ```python
+# RBAC权限验证
 from server.auth.rbac_middleware import require_permission
 
 @router.get("/protected-endpoint")
@@ -363,14 +387,36 @@ async def protected_function(
 ):
     # 业务逻辑
     pass
+
+# 新权限框架装饰器
+from server.auth.permission_framework import require_kb_permission, require_system_permission, Permission
+
+@router.get("/databases")
+@require_system_permission(Permission.READ)
+async def get_databases(current_user: User = Depends(get_required_user)):
+    # 业务逻辑
+    pass
+
+@router.delete("/databases/{db_id}")
+@require_kb_permission(Permission.DELETE, "db_id")
+async def delete_database(db_id: str, current_user: User = Depends(get_required_user)):
+    # 业务逻辑
+    pass
 ```
 
 #### 权限检查
 ```python
-# 在业务逻辑中检查权限
+# RBAC权限检查
 has_permission = await rbac_middleware.verify_permission(user, "resource:action", db)
 if not has_permission:
     raise HTTPException(status_code=403, detail="权限不足")
+
+# 新权限框架检查
+from server.auth.permission_framework import PermissionEngine, KnowledgeBaseResource, Permission
+
+engine = PermissionEngine.get_instance()
+resource = KnowledgeBaseResource(db_id)
+has_permission = await engine.check_permission_simple(user_id, resource, Permission.READ)
 ```
 
 ### 系统初始化
@@ -405,19 +451,26 @@ cache.invalidate_all_user_permissions()
 #### 常见问题
 
 1. **401 Unauthorized**
-   - 检查JWT Token是否有效
-   - 确认用户在数据库中存在
+   - 检查JWT Token是否有效（外部JWT使用RS256签名）
+   - 确认用户在数据库中存在（支持external_user_id查找）
    - 验证Token格式正确
+   - 确保使用rbac_middleware而非auth_middleware
 
 2. **403 Forbidden** 
-   - 检查用户角色分配
+   - 检查用户角色分配（rf_sjz等用户自动分配superadmin）
    - 确认角色拥有所需权限
    - 清除权限缓存重试
+   - 检查权限框架策略是否正确注册
 
 3. **422 Unprocessable Entity**
    - 检查API参数格式
    - 确认依赖注入配置正确
    - 验证装饰器使用方式
+
+4. **权限框架初始化失败**
+   - 检查策略注册是否成功
+   - 确认RBAC中间件正确传递
+   - 查看权限引擎状态日志
 
 #### 调试命令
 
@@ -430,8 +483,19 @@ curl -H "Authorization: Bearer <token>" \
 curl -H "Authorization: Bearer <token>" \
      http://localhost:5050/api/rbac/roles
 
+# 检查权限框架状态
+curl -H "Authorization: Bearer <token>" \
+     http://localhost:5050/api/permission-framework/status
+
+# 测试外部JWT认证
+curl -H "Authorization: Bearer <jwt_token>" \
+     http://localhost:5050/api/data/
+
 # 查看系统日志
 tail -f server.log
+
+# 杀死端口占用进程
+lsof -ti:5050 | xargs kill -9
 ```
 
 ## 重要开发原则
