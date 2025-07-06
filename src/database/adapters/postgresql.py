@@ -182,7 +182,7 @@ class PostgreSQLAdapter(SQLDatabaseAdapter):
                             'checked_in': self.engine.pool.checkedin(),
                             'checked_out': self.engine.pool.checkedout(),
                             'overflow': self.engine.pool.overflow(),
-                            'invalid': self.engine.pool.invalid()
+                            'invalid': getattr(self.engine.pool, '_invalidated', 0)
                         },
                         'timestamp': datetime.now().isoformat()
                     }

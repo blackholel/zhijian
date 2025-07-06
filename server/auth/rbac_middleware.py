@@ -136,7 +136,14 @@ class RBACMiddleware:
             
             if cached_permissions:
                 import json
-                user_permissions = set(json.loads(cached_permissions))
+                # 检查cached_permissions的类型
+                if isinstance(cached_permissions, list):
+                    user_permissions = set(cached_permissions)
+                elif isinstance(cached_permissions, str):
+                    user_permissions = set(json.loads(cached_permissions))
+                else:
+                    logger.warning(f"Unexpected cached permissions type: {type(cached_permissions)}")
+                    user_permissions = set()
                 logger.debug(f"User {user.id} permissions loaded from cache")
             else:
                 # 从数据库查询权限
@@ -282,7 +289,14 @@ class RBACMiddleware:
         
         if cached_permissions:
             import json
-            return set(json.loads(cached_permissions))
+            # 检查cached_permissions的类型
+            if isinstance(cached_permissions, list):
+                return set(cached_permissions)
+            elif isinstance(cached_permissions, str):
+                return set(json.loads(cached_permissions))
+            else:
+                logger.warning(f"Unexpected cached permissions type: {type(cached_permissions)}")
+                return set()
         else:
             # 从数据库查询权限
             user_permissions = await self._query_user_permissions(str(user.id))

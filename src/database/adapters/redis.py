@@ -196,10 +196,21 @@ class RedisAdapter(CacheAdapter):
         """计算当前数据库的键数量"""
         db_key = f'db{self.db}'
         if db_key in keyspace_info:
-            # 解析格式如: "keys=123,expires=45,avg_ttl=789"
             db_stats = keyspace_info[db_key]
-            keys_part = db_stats.split(',')[0]
-            return int(keys_part.split('=')[1])
+            
+            # 处理不同的数据格式
+            if isinstance(db_stats, dict):
+                # 如果是字典格式，直接取keys值
+                return db_stats.get('keys', 0)
+            elif isinstance(db_stats, str):
+                # 如果是字符串格式，解析格式如: "keys=123,expires=45,avg_ttl=789"
+                try:
+                    keys_part = db_stats.split(',')[0]
+                    return int(keys_part.split('=')[1])
+                except (IndexError, ValueError):
+                    return 0
+            else:
+                return 0
         return 0
     
     async def get_connection_info(self) -> Dict[str, Any]:

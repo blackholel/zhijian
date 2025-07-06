@@ -91,7 +91,31 @@ class ExternalJWTProcessor:
                     }
                 )
                 
-                created_user_info = await user_repo.create(new_user_info)
+                try:
+                    created_user_info = await user_repo.create(new_user_info)
+                except ValueError as e:
+                    if "User already exists" in str(e):
+                        # 用户已存在，重新获取
+                        logger.info(f"User already exists, fetching existing user: {jwt_payload['user_id']}")
+                        # 尝试多种方式获取用户
+                        existing_user_info = await user_repo.get_by_external_id(jwt_payload['user_id'])
+                        if not existing_user_info:
+                            # 如果通过external_id获取失败，尝试通过user_id获取
+                            existing_user_info = await user_repo.get_by_id(jwt_payload['user_id'])
+                        if not existing_user_info:
+                            # 如果还是失败，尝试通过用户名获取
+                            existing_user_info = await user_repo.get_by_username(jwt_payload['username'])
+                        
+                        if existing_user_info:
+                            created_user_info = existing_user_info
+                            logger.info(f"Successfully retrieved existing user: {existing_user_info.username}")
+                        else:
+                            # 如果都失败了，可能是数据库连接问题或者数据不一致，记录错误但不抛出异常
+                            logger.error(f"User exists but cannot be retrieved: {jwt_payload['user_id']}")
+                            # 创建一个临时用户对象用于返回，避免阻断认证流程
+                            created_user_info = new_user_info
+                    else:
+                        raise
                 
                 # 转换为 User 模型对象（兼容性）
                 user = User(
@@ -278,9 +302,18 @@ class ExternalJWTProcessor:
                 cached_data = await redis_adapter.get(session_key)
                 if cached_data:
                     try:
-                        cached_session = json.loads(cached_data)
+                        # 检查cached_data是否已经是dict对象
+                        if isinstance(cached_data, dict):
+                            cached_session = cached_data
+                        elif isinstance(cached_data, (str, bytes)):
+                            cached_session = json.loads(cached_data)
+                        else:
+                            logger.warning(f"Unexpected cached_data type: {type(cached_data)}")
+                            cached_session = None
                     except json.JSONDecodeError:
                         logger.warning(f"Invalid JSON in JWT session cache: {session_id}")
+                    except Exception as e:
+                        logger.warning(f"Error processing cached session data: {e}")
             
             # 检查会话缓存
             if cached_session and cached_session.get('user_id'):

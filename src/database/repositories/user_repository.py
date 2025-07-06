@@ -52,14 +52,20 @@ class UserInfo:
         """从字典创建"""
         created_at = None
         if data.get('created_at'):
-            created_at = datetime.fromisoformat(data['created_at'])
+            if isinstance(data['created_at'], str):
+                created_at = datetime.fromisoformat(data['created_at'])
+            elif isinstance(data['created_at'], datetime):
+                created_at = data['created_at']
         
         updated_at = None
         if data.get('updated_at'):
-            updated_at = datetime.fromisoformat(data['updated_at'])
+            if isinstance(data['updated_at'], str):
+                updated_at = datetime.fromisoformat(data['updated_at'])
+            elif isinstance(data['updated_at'], datetime):
+                updated_at = data['updated_at']
         
         return cls(
-            user_id=data['user_id'],
+            user_id=data.get('id') or data.get('user_id'),  # 数据库字段是id，不是user_id
             username=data.get('username'),
             email=data.get('email'),
             display_name=data.get('display_name'),
@@ -86,9 +92,8 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
         """创建用户"""
         try:
             async with await self.get_session() as session:
-                # 检查用户是否已存在
-                existing_user = session.execute(text("SELECT user_id FROM users WHERE user_id = :user_id OR external_user_id = :external_user_id"), {
-                    'user_id': user.user_id,
+                # 检查用户是否已存在（只检查external_user_id，避免UUID格式错误）
+                existing_user = session.execute(text("SELECT user_id FROM users WHERE external_user_id = :external_user_id"), {
                     'external_user_id': user.external_user_id
                 }).first()
                 
@@ -103,6 +108,7 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
                            :organization, :is_active, :created_at, :updated_at, :metadata)
                 """
                 
+                import json
                 await self.execute_query(query, {
                     'user_id': user.user_id,
                     'username': user.username,
@@ -113,7 +119,7 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
                     'is_active': user.is_active,
                     'created_at': user.created_at,
                     'updated_at': user.updated_at,
-                    'metadata': user.metadata
+                    'metadata': json.dumps(user.metadata) if user.metadata else '{}'
                 })
             
             # 设置缓存
@@ -138,7 +144,22 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
             result = await self.execute_query(query, {'user_id': user_id})
             
             if result:
-                user_data = dict(result[0])
+                # 处理SQLAlchemy行对象
+                row = result[0]
+                if hasattr(row, '_asdict'):
+                    user_data = row._asdict()
+                elif hasattr(row, '__dict__'):
+                    user_data = row.__dict__
+                else:
+                    user_data = dict(row)
+                
+                # 解析metadata JSON字符串
+                if user_data.get('metadata') and isinstance(user_data['metadata'], str):
+                    try:
+                        import json
+                        user_data['metadata'] = json.loads(user_data['metadata'])
+                    except json.JSONDecodeError:
+                        user_data['metadata'] = {}
                 user = UserInfo.from_dict(user_data)
                 
                 # 设置缓存
@@ -164,7 +185,22 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
             result = await self.execute_query(query, {'external_user_id': external_user_id})
             
             if result:
-                user_data = dict(result[0])
+                # 处理SQLAlchemy行对象
+                row = result[0]
+                if hasattr(row, '_asdict'):
+                    user_data = row._asdict()
+                elif hasattr(row, '__dict__'):
+                    user_data = row.__dict__
+                else:
+                    user_data = dict(row)
+                
+                # 解析metadata JSON字符串
+                if user_data.get('metadata') and isinstance(user_data['metadata'], str):
+                    try:
+                        import json
+                        user_data['metadata'] = json.loads(user_data['metadata'])
+                    except json.JSONDecodeError:
+                        user_data['metadata'] = {}
                 user = UserInfo.from_dict(user_data)
                 
                 # 设置多个缓存键
@@ -186,7 +222,21 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
             result = await self.execute_query(query, {'username': username})
             
             if result:
-                user_data = dict(result[0])
+                # 处理SQLAlchemy行对象
+                row = result[0]
+                if hasattr(row, '_asdict'):
+                    user_data = row._asdict()
+                elif hasattr(row, '__dict__'):
+                    user_data = row.__dict__
+                else:
+                    user_data = dict(row)
+                # 解析metadata JSON字符串
+                if user_data.get('metadata') and isinstance(user_data['metadata'], str):
+                    try:
+                        import json
+                        user_data['metadata'] = json.loads(user_data['metadata'])
+                    except json.JSONDecodeError:
+                        user_data['metadata'] = {}
                 user = UserInfo.from_dict(user_data)
                 return user
             
@@ -209,6 +259,7 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
                 WHERE user_id = :user_id
             """
             
+            import json
             await self.execute_query(query, {
                 'user_id': user.user_id,
                 'username': user.username,
@@ -217,7 +268,7 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
                 'organization': user.organization,
                 'is_active': user.is_active,
                 'updated_at': user.updated_at,
-                'metadata': user.metadata
+                'metadata': json.dumps(user.metadata) if user.metadata else '{}'
             })
             
             # 清除相关缓存
@@ -387,7 +438,14 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
             result = await self.execute_query(stats_query)
             
             if result:
-                stats = dict(result[0])
+                # 处理SQLAlchemy行对象
+                row = result[0]
+                if hasattr(row, '_asdict'):
+                    stats = row._asdict()
+                elif hasattr(row, '__dict__'):
+                    stats = row.__dict__
+                else:
+                    stats = dict(row)
                 
                 # 获取组织分布
                 org_query = """
@@ -400,7 +458,15 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
                 """
                 
                 org_result = await self.execute_query(org_query)
-                organizations = [dict(row) for row in org_result] if org_result else []
+                organizations = []
+                if org_result:
+                    for row in org_result:
+                        if hasattr(row, '_asdict'):
+                            organizations.append(row._asdict())
+                        elif hasattr(row, '__dict__'):
+                            organizations.append(row.__dict__)
+                        else:
+                            organizations.append(dict(row))
                 
                 stats['organization_distribution'] = organizations
                 
