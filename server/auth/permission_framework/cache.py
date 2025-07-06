@@ -102,7 +102,7 @@ class CompressedRedisCache:
     
     async def get(self, key: str) -> Optional[Any]:
         try:
-            compressed_data = self.redis.get(key)
+            compressed_data = await self.redis.get(key)
             if compressed_data:
                 # 解压缩并反序列化
                 if isinstance(compressed_data, str):
@@ -118,13 +118,13 @@ class CompressedRedisCache:
             # 序列化并压缩
             serialized = pickle.dumps(value)
             compressed = zlib.compress(serialized)
-            self.redis.set(key, compressed.decode('latin1'), self.ttl)
+            await self.redis.set(key, compressed.decode('latin1'), self.ttl)
         except Exception as e:
             logger.error(f"Redis cache set error: {e}")
     
     async def delete(self, key: str):
         try:
-            self.redis.delete(key)
+            await self.redis.delete(key)
         except Exception as e:
             logger.error(f"Redis cache delete error: {e}")
     

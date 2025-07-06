@@ -80,29 +80,56 @@ async def list_roles(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     search: Optional[str] = None,
-    current_user: User = Depends(require_permission("role:read")),
-    db: Session = Depends(get_db)
+    current_user: User = Depends(require_permission("role:read"))
 ):
     """获取角色列表"""
     try:
-        query = db.query(Role)
+        from src.database.manager import get_database_manager
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        
+        postgres_adapter = await db_manager.get_postgresql_adapter('server_db')
+        
+        # 构建查询
+        where_clause = ""
+        params = {"skip": skip, "limit": limit}
         
         if search:
-            query = query.filter(
-                or_(
-                    Role.name.ilike(f"%{search}%"),
-                    Role.display_name.ilike(f"%{search}%")
-                )
-            )
+            where_clause = "WHERE (name ILIKE :search OR display_name ILIKE :search)"
+            params["search"] = f"%{search}%"
         
-        total = query.count()
-        roles = query.offset(skip).limit(limit).all()
+        # 获取总数
+        count_query = f"SELECT COUNT(*) FROM roles {where_clause}"
+        count_result = await postgres_adapter.execute_query(count_query, params)
+        total = count_result[0][0] if count_result else 0
+        
+        # 获取角色列表
+        list_query = f"""
+            SELECT id, name, display_name, description, is_system, created_at
+            FROM roles {where_clause}
+            ORDER BY created_at DESC
+            OFFSET :skip LIMIT :limit
+        """
+        
+        result = await postgres_adapter.execute_query(list_query, params)
+        
+        roles = []
+        if result:
+            for row in result:
+                roles.append({
+                    "id": str(row[0]),
+                    "name": row[1],
+                    "display_name": row[2],
+                    "description": row[3],
+                    "is_system": row[4],
+                    "created_at": row[5].isoformat() if row[5] else None
+                })
         
         return {
             "total": total,
             "skip": skip,
             "limit": limit,
-            "roles": [role.to_dict() for role in roles]
+            "roles": roles
         }
         
     except Exception as e:
@@ -220,35 +247,69 @@ async def list_permissions(
     resource_type: Optional[str] = None,
     action: Optional[str] = None,
     search: Optional[str] = None,
-    current_user: User = Depends(require_permission("permission:read")),
-    db: Session = Depends(get_db)
+    current_user: User = Depends(require_permission("permission:read"))
 ):
     """获取权限列表"""
     try:
-        query = db.query(Permission)
+        from src.database.manager import get_database_manager
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        
+        postgres_adapter = await db_manager.get_postgresql_adapter('server_db')
+        
+        # 构建查询条件
+        where_conditions = []
+        params = {"skip": skip, "limit": limit}
         
         if resource_type:
-            query = query.filter(Permission.resource_type == resource_type)
+            where_conditions.append("resource_type = :resource_type")
+            params["resource_type"] = resource_type
         
         if action:
-            query = query.filter(Permission.action == action)
+            where_conditions.append("action = :action")
+            params["action"] = action
         
         if search:
-            query = query.filter(
-                or_(
-                    Permission.name.ilike(f"%{search}%"),
-                    Permission.display_name.ilike(f"%{search}%")
-                )
-            )
+            where_conditions.append("(name ILIKE :search OR display_name ILIKE :search)")
+            params["search"] = f"%{search}%"
         
-        total = query.count()
-        permissions = query.offset(skip).limit(limit).all()
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # 获取总数
+        count_query = f"SELECT COUNT(*) FROM permissions {where_clause}"
+        count_result = await postgres_adapter.execute_query(count_query, params)
+        total = count_result[0][0] if count_result else 0
+        
+        # 获取权限列表
+        list_query = f"""
+            SELECT id, name, display_name, resource_type, action, description, created_at
+            FROM permissions {where_clause}
+            ORDER BY resource_type, action, name
+            OFFSET :skip LIMIT :limit
+        """
+        
+        result = await postgres_adapter.execute_query(list_query, params)
+        
+        permissions = []
+        if result:
+            for row in result:
+                permissions.append({
+                    "id": str(row[0]),
+                    "name": row[1],
+                    "display_name": row[2],
+                    "resource_type": row[3],
+                    "action": row[4],
+                    "description": row[5],
+                    "created_at": row[6].isoformat() if row[6] else None
+                })
         
         return {
             "total": total,
             "skip": skip,
             "limit": limit,
-            "permissions": [perm.to_dict() for perm in permissions]
+            "permissions": permissions
         }
         
     except Exception as e:

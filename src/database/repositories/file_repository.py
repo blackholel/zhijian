@@ -4,11 +4,21 @@
 
 import logging
 from typing import List, Optional, Dict, Any
+from enum import Enum
 
 from .base import FileRepository as BaseFileRepository
 from ..connection_manager import DatabaseConnectionManager
 
 logger = logging.getLogger(__name__)
+
+
+class FileStatus(Enum):
+    """文件状态枚举"""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    DELETED = "deleted"
 
 
 class FileInfo:

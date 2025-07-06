@@ -164,8 +164,8 @@ class PermissionCache:
                 JOIN role_permissions rp ON p.id = rp.permission_id
                 JOIN roles r ON rp.role_id = r.id
                 JOIN user_roles ur ON r.id = ur.role_id
-                JOIN users u ON ur.user_id = u.id
-                WHERE (u.external_user_id = :user_id OR u.id::text = :user_id OR u.username = :user_id)
+                JOIN users u ON ur.user_id = u.user_id
+                WHERE (u.external_user_id = :user_id OR u.user_id::text = :user_id OR u.username = :user_id)
                 AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
             """)
             

@@ -127,46 +127,48 @@ class PermissionAuditLogger:
     async def _write_to_database(self, audit_log: PermissionAuditLog):
         """写入数据库"""
         try:
-            db = db_manager.get_session()
-            try:
-                # 创建审计表（如果不存在）
-                await self._ensure_audit_table(db)
-                
-                # 插入审计记录
-                db.execute(text("""
-                    INSERT INTO permission_audit_logs (
-                        id, timestamp, user_id, resource_uri, permission, 
-                        result, strategy_used, reason, ip_address, user_agent,
-                        session_id, request_metadata
-                    ) VALUES (
-                        :id, :timestamp, :user_id, :resource_uri, :permission,
-                        :result, :strategy_used, :reason, :ip_address, :user_agent,
-                        :session_id, :request_metadata
-                    )
-                """), {
-                    "id": audit_log.id,
-                    "timestamp": audit_log.timestamp,
-                    "user_id": audit_log.user_id,
-                    "resource_uri": audit_log.resource_uri,
-                    "permission": audit_log.permission,
-                    "result": audit_log.result,
-                    "strategy_used": audit_log.strategy_used,
-                    "reason": audit_log.reason,
-                    "ip_address": audit_log.ip_address,
-                    "user_agent": audit_log.user_agent,
-                    "session_id": audit_log.session_id,
-                    "request_metadata": json.dumps(audit_log.request_metadata)
-                })
-                db.commit()
-            finally:
-                db.close()
+            from src.database.manager import get_database_manager
+            db_manager = get_database_manager()
+            await db_manager.initialize()
+            
+            # 创建审计表（如果不存在）
+            await self._ensure_audit_table(db_manager)
+            
+            # 插入审计记录
+            postgres_adapter = await db_manager.get_postgresql_adapter('server_db')
+            await postgres_adapter.execute_query("""
+                INSERT INTO permission_audit_logs (
+                    id, timestamp, user_id, resource_uri, permission, 
+                    result, strategy_used, reason, ip_address, user_agent,
+                    session_id, request_metadata
+                ) VALUES (
+                    :id, :timestamp, :user_id, :resource_uri, :permission,
+                    :result, :strategy_used, :reason, :ip_address, :user_agent,
+                    :session_id, :request_metadata
+                )
+            """, {
+                "id": audit_log.id,
+                "timestamp": audit_log.timestamp,
+                "user_id": audit_log.user_id,
+                "resource_uri": audit_log.resource_uri,
+                "permission": audit_log.permission,
+                "result": audit_log.result,
+                "strategy_used": audit_log.strategy_used,
+                "reason": audit_log.reason,
+                "ip_address": audit_log.ip_address,
+                "user_agent": audit_log.user_agent,
+                "session_id": audit_log.session_id,
+                "request_metadata": json.dumps(audit_log.request_metadata)
+            })
         except Exception as e:
             logger.error(f"Error writing audit log to database: {e}")
     
-    async def _ensure_audit_table(self, db):
+    async def _ensure_audit_table(self, db_manager):
         """确保审计表存在"""
         try:
-            db.execute(text("""
+            postgres_adapter = await db_manager.get_postgresql_adapter('server_db')
+            
+            await postgres_adapter.execute_query("""
                 CREATE TABLE IF NOT EXISTS permission_audit_logs (
                     id VARCHAR PRIMARY KEY,
                     timestamp TIMESTAMP NOT NULL,
@@ -181,20 +183,18 @@ class PermissionAuditLogger:
                     session_id VARCHAR,
                     request_metadata TEXT
                 )
-            """))
+            """)
             
             # 创建索引
-            db.execute(text("""
+            await postgres_adapter.execute_query("""
                 CREATE INDEX IF NOT EXISTS idx_audit_user_timestamp 
                 ON permission_audit_logs(user_id, timestamp)
-            """))
+            """)
             
-            db.execute(text("""
+            await postgres_adapter.execute_query("""
                 CREATE INDEX IF NOT EXISTS idx_audit_resource 
                 ON permission_audit_logs(resource_uri)
-            """))
-            
-            db.commit()
+            """)
         except Exception as e:
             logger.error(f"Error ensuring audit table: {e}")
     
