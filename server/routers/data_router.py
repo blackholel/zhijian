@@ -165,21 +165,184 @@ async def upload_file(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No selected file")
 
-    # 根据db_id获取上传路径，如果db_id为None则使用默认路径
-    if db_id:
-        upload_dir = knowledge_base.get_db_upload_path(db_id)
-    else:
-        upload_dir = os.path.join(config.save_dir, "database", "uploads")
+    # 使用新的文件管理系统
+    from src.database.manager import get_database_manager
+    from src.database.repositories.file_repository import FileInfo
+    from datetime import datetime
+    import hashlib
+    import uuid
+    
+    try:
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        
+        # 获取MinIO适配器进行文件存储
+        minio_adapter = await db_manager.get_minio_adapter()
+        
+        # 读取文件内容
+        file_content = await file.read()
+        
+        # 生成唯一文件名和路径
+        basename, ext = os.path.splitext(file.filename)
+        unique_filename = f"{basename}_{hashstr(basename, 4, with_salt=True)}{ext}".lower()
+        
+        # 生成文件ID和存储路径
+        file_id = hashlib.sha256(f"{db_id or 'default'}:{unique_filename}:{datetime.now().isoformat()}".encode()).hexdigest()[:32]
+        storage_key = f"{db_id or 'uploads'}/documents/{file_id}/{unique_filename}"
+        
+        # 上传文件到MinIO
+        await minio_adapter.upload_bytes(file_content, storage_key)
+        
+        # 创建文件信息对象
+        file_info = FileInfo(
+            file_id=file_id,
+            filename=unique_filename,
+            storage_key=storage_key,
+            size=len(file_content),
+            content_type=file.content_type,
+            metadata={
+                "upload_time": datetime.now().isoformat(),
+                "original_filename": file.filename,
+                "uploaded_by": current_user.username if hasattr(current_user, 'username') else str(current_user.id),
+                "kb_id": db_id
+            }
+        )
+        
+        # 获取文件仓储并保存文件信息
+        file_repo = db_manager.get_file_repository()
+        saved_file_info = await file_repo.create(file_info)
+        
+        return {
+            "message": "File successfully uploaded to distributed storage",
+            "file_id": file_info.file_id,
+            "filename": file_info.filename,
+            "storage_key": file_info.storage_key,
+            "size": file_info.size,
+            "status": "pending_processing",
+            "db_id": db_id,
+            # 保持向后兼容性，提供file_path字段
+            "file_path": file_info.storage_key
+        }
+        
+    except Exception as e:
+        logger.error(f"File upload failed: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
-    basename, ext = os.path.splitext(file.filename)
-    filename = f"{basename}_{hashstr(basename, 4, with_salt=True)}{ext}".lower()
-    file_path = os.path.join(upload_dir, filename)
-    os.makedirs(upload_dir, exist_ok=True)
+@data.get("/file-status/{file_id}")
+@require_system_permission(Permission.READ)
+async def get_file_status(
+    file_id: str,
+    current_user: User = Depends(get_required_user)
+):
+    """获取文件处理状态"""
+    try:
+        from src.database.manager import get_database_manager
+        
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        
+        file_repo = db_manager.get_file_repository()
+        file_info = await file_repo.get_by_id(file_id)
+        
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        return {
+            "file_id": file_info.file_id,
+            "filename": file_info.filename,
+            "status": file_info.status,
+            "size": file_info.size,
+            "content_type": file_info.content_type,
+            "created_at": file_info.created_at.isoformat() if hasattr(file_info, 'created_at') else None,
+            "updated_at": file_info.updated_at.isoformat() if hasattr(file_info, 'updated_at') else None,
+            "metadata": file_info.metadata
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get file status: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to get file status: {e}")
 
-    with open(file_path, "wb") as buffer:
-        buffer.write(await file.read())
+@data.post("/file-process/{file_id}")
+@require_system_permission(Permission.WRITE)
+async def process_file(
+    file_id: str,
+    processing_params: dict = Body(default={}),
+    current_user: User = Depends(get_required_user)
+):
+    """手动触发文件处理"""
+    try:
+        from src.database.manager import get_database_manager
+        
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        
+        file_repo = db_manager.get_file_repository()
+        
+        # 获取文件信息并更新状态为处理中
+        file_info = await file_repo.get_by_id(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        file_info.metadata["status"] = "processing"
+        await file_repo.update(file_info)
+        
+        # 这里可以添加异步任务调度，比如使用Celery
+        # 目前返回处理中状态
+        return {
+            "message": "File processing initiated",
+            "file_id": file_id,
+            "status": "processing",
+            "processing_params": processing_params
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to process file: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to process file: {e}")
 
-    return {"message": "File successfully uploaded", "file_path": file_path, "db_id": db_id}
+@data.get("/files")
+@require_system_permission(Permission.READ)
+async def list_files(
+    db_id: str = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: str = Query(None),
+    current_user: User = Depends(get_required_user)
+):
+    """获取文件列表"""
+    try:
+        from src.database.manager import get_database_manager
+        
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        
+        file_repo = db_manager.get_file_repository()
+        
+        # 获取文件列表
+        files = await file_repo.find_all(limit=limit, offset=offset)
+        
+        return {
+            "files": [
+                {
+                    "file_id": f.file_id,
+                    "filename": f.filename,
+                    "size": f.size,
+                    "content_type": f.content_type,
+                    "status": f.status,
+                    "created_at": f.created_at.isoformat() if hasattr(f, 'created_at') else None,
+                    "metadata": f.metadata
+                }
+                for f in files
+            ],
+            "total": len(files),
+            "limit": limit,
+            "offset": offset
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list files: {e}, {traceback.format_exc()}")
+        return {"files": [], "total": 0, "error": str(e)}
 
 @data.get("/graph")
 async def get_graph_info(current_user: User = Depends(get_admin_user)):
