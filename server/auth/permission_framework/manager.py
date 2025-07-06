@@ -11,7 +11,8 @@ from .engine import PermissionEngine
 from .cache import UnifiedPermissionCache, CacheInvalidationManager
 from .audit import PermissionAuditLogger, PermissionPerformanceMonitor
 from .concrete_resources import ResourceFactory
-from server.utils.redis_manager import get_redis_manager
+# 使用新的数据库架构中的Redis适配器
+from src.database.manager import get_database_manager
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,10 @@ class PermissionFrameworkManager:
             
             # 2. 初始化缓存系统
             if enable_cache:
-                redis_manager = get_redis_manager()
-                self.cache_manager = UnifiedPermissionCache(redis_manager)
+                db_manager = get_database_manager()
+                await db_manager.initialize()
+                redis_adapter = await db_manager.get_redis_adapter()
+                self.cache_manager = UnifiedPermissionCache(redis_adapter)
                 self.engine.set_cache_manager(self.cache_manager)
                 
                 # 初始化缓存失效管理器

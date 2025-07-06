@@ -51,7 +51,7 @@ environments:
       
     # MinIO对象存储
     minio:
-      uri: http://localhost:9001
+      uri: http://localhost:9000
       access_key: minioadmin
       secret_key: A6pgsql20200624
       secure: false
@@ -114,7 +114,7 @@ environments:
       timeout: 30
       
     minio:
-      uri: http://localhost:9001
+      uri: http://localhost:9000
       access_key: minioadmin
       secret_key: A6pgsql20200624
       secure: false

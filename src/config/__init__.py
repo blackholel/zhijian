@@ -95,6 +95,54 @@ class DatabaseConfig:
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
     
+    def get_neo4j_uri(self, db_name: str = 'neo4j') -> str:
+        """获取Neo4j连接URI"""
+        config = self.get_db_config(db_name)
+        uri = config.get('uri', 'bolt://localhost:7687')
+        return uri
+    
+    def get_redis_url(self, db_name: str = 'redis') -> str:
+        """获取Redis连接URL"""
+        config = self.get_db_config(db_name)
+        host = config.get('host', 'localhost')
+        port = config.get('port', 6379)
+        password = config.get('password', '')
+        db = config.get('db', 0)
+        
+        if password:
+            return f"redis://:{password}@{host}:{port}/{db}"
+        else:
+            return f"redis://{host}:{port}/{db}"
+    
+    def get_milvus_config(self, db_name: str = 'milvus') -> Dict[str, Any]:
+        """获取Milvus配置"""
+        config = self.get_db_config(db_name)
+        return {
+            'uri': config.get('uri', 'http://localhost:19530'),
+            'user': config.get('user', ''),
+            'password': config.get('password', ''),
+            'db_name': config.get('db_name', 'default'),
+            'timeout': config.get('timeout', 30)
+        }
+    
+    def get_minio_config(self, db_name: str = 'minio') -> Dict[str, Any]:
+        """获取MinIO配置"""
+        config = self.get_db_config(db_name)
+        uri = config.get('uri', 'http://localhost:9000')
+        
+        # 解析URI以确定是否使用HTTPS
+        from urllib.parse import urlparse
+        parsed = urlparse(uri)
+        secure = parsed.scheme == 'https'
+        
+        return {
+            'endpoint': uri,
+            'access_key': config.get('access_key', 'minioadmin'),
+            'secret_key': config.get('secret_key', 'minioadmin'),
+            'secure': config.get('secure', secure),
+            'region': config.get('region', 'us-east-1')
+        }
+    
     def validate_config(self, db_name: str) -> bool:
         """验证数据库配置"""
         try:

@@ -12,12 +12,19 @@ from server.auth.auth_middleware import is_public_path
 from server.auth.rbac_middleware import rbac_middleware
 from server.auth.permission_framework import initialize_permission_framework, shutdown_permission_framework
 from src.utils.logging_config import logger
+from src.database.manager import initialize_global_database_manager, shutdown_global_database_manager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时执行
     try:
+        # 初始化数据库管理器
+        logger.info("Initializing unified database manager...")
+        await initialize_global_database_manager()
+        logger.info("Unified database manager initialized successfully")
+        
+        # 初始化权限框架
         logger.info("Initializing permission framework...")
         await initialize_permission_framework(
             rbac_middleware,
@@ -27,7 +34,7 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Permission framework initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize permission framework: {e}")
+        logger.error(f"Failed to initialize application: {e}")
         raise
     
     yield  # 应用运行期间
@@ -37,8 +44,13 @@ async def lifespan(app: FastAPI):
         logger.info("Shutting down permission framework...")
         await shutdown_permission_framework()
         logger.info("Permission framework shutdown successfully")
+        
+        # 关闭数据库管理器
+        logger.info("Shutting down unified database manager...")
+        await shutdown_global_database_manager()
+        logger.info("Unified database manager shutdown successfully")
     except Exception as e:
-        logger.error(f"Error shutting down permission framework: {e}")
+        logger.error(f"Error shutting down application: {e}")
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(router, prefix="/api")

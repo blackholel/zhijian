@@ -7,7 +7,7 @@ from sqlalchemy import text
 import logging
 
 from server.models.user_model import User
-from server.utils.redis_manager import get_permission_cache
+from src.database.repositories.user_repository import UserRepository, UserInfo
 
 logger = logging.getLogger(__name__)
 
@@ -55,73 +55,95 @@ class ExternalJWTProcessor:
             raise ValueError(f"JWT processing failed: {str(e)}")
     
     @staticmethod
-    def sync_user_from_jwt(jwt_payload: Dict[str, Any], db: Session) -> User:
+    async def sync_user_from_jwt(jwt_payload: Dict[str, Any], user_repo: UserRepository) -> User:
         """从JWT同步用户信息"""
         try:
             # 查找现有用户
-            user = db.query(User).filter(
-                User.external_user_id == jwt_payload['user_id']
-            ).first()
+            user_info = await user_repo.get_by_external_id(jwt_payload['user_id'])
+            
+            # 转换为 User 模型对象（兼容性）
+            user = None
+            if user_info:
+                user = User(
+                    id=user_info.user_id,
+                    external_user_id=user_info.external_user_id,
+                    username=user_info.username,
+                    display_name=user_info.display_name,
+                    organization=user_info.organization,
+                    is_active=user_info.is_active,
+                    created_at=user_info.created_at,
+                    updated_at=user_info.updated_at
+                )
             
             if not user:
                 # 创建新用户
-                user = User(
+                new_user_info = UserInfo(
+                    user_id=jwt_payload['user_id'],
                     external_user_id=jwt_payload['user_id'],
                     username=jwt_payload['username'],
                     display_name=jwt_payload.get('display_name'),
                     organization=jwt_payload.get('organization'),
-                    region=jwt_payload.get('region'),
-                    login_name=jwt_payload['username'],
-                    email=None,  # 外部JWT可能不包含email
-                    password_hash=None,  # 外部用户无需密码
-                    is_active=True
+                    is_active=True,
+                    metadata={
+                        'region': jwt_payload.get('region'),
+                        'client_id': jwt_payload.get('client_id'),
+                        'scope': jwt_payload.get('scope', [])
+                    }
                 )
-                db.add(user)
-                db.commit()
-                db.refresh(user)
+                
+                created_user_info = await user_repo.create(new_user_info)
+                
+                # 转换为 User 模型对象（兼容性）
+                user = User(
+                    id=created_user_info.user_id,
+                    external_user_id=created_user_info.external_user_id,
+                    username=created_user_info.username,
+                    display_name=created_user_info.display_name,
+                    organization=created_user_info.organization,
+                    is_active=created_user_info.is_active,
+                    created_at=created_user_info.created_at,
+                    updated_at=created_user_info.updated_at
+                )
                 
                 logger.info(f"Created new user from JWT: {user.username}")
                 
                 # 为新用户分配角色
-                ExternalJWTProcessor._assign_user_role(user, jwt_payload, db)
+                await ExternalJWTProcessor._assign_user_role(user, jwt_payload, user_repo)
                 
             else:
                 # 更新现有用户信息
                 updated = False
                 
                 if user.display_name != jwt_payload.get('display_name'):
+                    user_info.display_name = jwt_payload.get('display_name')
                     user.display_name = jwt_payload.get('display_name')
                     updated = True
                 
                 if user.organization != jwt_payload.get('organization'):
+                    user_info.organization = jwt_payload.get('organization')
                     user.organization = jwt_payload.get('organization')
                     updated = True
                 
-                if user.region != jwt_payload.get('region'):
-                    user.region = jwt_payload.get('region')
+                # 更新元数据
+                if user_info.metadata.get('region') != jwt_payload.get('region'):
+                    user_info.metadata['region'] = jwt_payload.get('region')
                     updated = True
                 
-                # 更新最后登录时间
-                user.last_login = datetime.utcnow()
-                updated = True
-                
                 if updated:
-                    db.commit()
-                    db.refresh(user)
+                    await user_repo.update(user_info)
                     logger.debug(f"Updated user from JWT: {user.username}")
                 
                 # 检查并更新用户角色
-                ExternalJWTProcessor._check_and_update_user_role(user, jwt_payload, db)
+                await ExternalJWTProcessor._check_and_update_user_role(user, jwt_payload, user_repo)
             
             return user
             
         except Exception as e:
-            db.rollback()
             logger.error(f"Error syncing user from JWT: {e}")
             raise ValueError(f"Failed to sync user: {str(e)}")
     
     @staticmethod
-    def _assign_user_role(user: User, jwt_payload: Dict[str, Any], db: Session):
+    async def _assign_user_role(user: User, jwt_payload: Dict[str, Any], user_repo: UserRepository):
         """为用户分配适当的角色"""
         try:
             # 根据用户ID/用户名确定角色
@@ -131,26 +153,31 @@ class ExternalJWTProcessor:
             # 确定目标角色
             target_role_name = ExternalJWTProcessor._determine_user_role(user_id, username, jwt_payload)
             
-            # 查找目标角色
-            role_query = text("""
-                SELECT id FROM roles WHERE name = :role_name AND is_system = true
-            """)
-            result = db.execute(role_query, {"role_name": target_role_name}).first()
+            # 使用数据库管理器执行角色分配
+            from src.database.manager import get_database_manager
+            db_manager = get_database_manager()
+            await db_manager.initialize()
+            postgres_adapter = await db_manager.get_postgresql_adapter('server_db')
             
-            if result:
-                role_id = result[0]
+            # 查找目标角色
+            role_query = """
+                SELECT id FROM roles WHERE name = :role_name AND is_system = true
+            """
+            result = await postgres_adapter.execute_query(role_query, {"role_name": target_role_name})
+            
+            if result and len(result) > 0:
+                role_id = result[0][0]
                 
                 # 分配角色（如果不存在）
-                assign_role_query = text("""
+                assign_role_query = """
                     INSERT INTO user_roles (id, user_id, role_id, granted_at)
                     VALUES (gen_random_uuid(), :user_id, :role_id, NOW())
                     ON CONFLICT (user_id, role_id) DO NOTHING
-                """)
-                db.execute(assign_role_query, {
+                """
+                await postgres_adapter.execute_query(assign_role_query, {
                     "user_id": user.id,
                     "role_id": role_id
                 })
-                db.commit()
                 
                 logger.info(f"Assigned role '{target_role_name}' to user: {user.username}")
             else:
@@ -160,7 +187,7 @@ class ExternalJWTProcessor:
             logger.error(f"Error assigning user role: {e}")
     
     @staticmethod
-    def _check_and_update_user_role(user: User, jwt_payload: Dict[str, Any], db: Session):
+    async def _check_and_update_user_role(user: User, jwt_payload: Dict[str, Any], user_repo: UserRepository):
         """检查并更新现有用户的角色"""
         try:
             user_id = jwt_payload.get('user_id', '')
@@ -169,21 +196,29 @@ class ExternalJWTProcessor:
             # 确定目标角色
             target_role_name = ExternalJWTProcessor._determine_user_role(user_id, username, jwt_payload)
             
+            # 使用数据库管理器检查角色
+            from src.database.manager import get_database_manager
+            db_manager = get_database_manager()
+            await db_manager.initialize()
+            postgres_adapter = await db_manager.get_postgresql_adapter('server_db')
+            
             # 检查用户是否已有该角色
-            check_role_query = text("""
+            check_role_query = """
                 SELECT 1 FROM user_roles ur
                 JOIN roles r ON ur.role_id = r.id
                 WHERE ur.user_id = :user_id AND r.name = :role_name
-            """)
+            """
             
-            has_role = db.execute(check_role_query, {
+            result = await postgres_adapter.execute_query(check_role_query, {
                 "user_id": user.id,
                 "role_name": target_role_name
-            }).first()
+            })
+            
+            has_role = result and len(result) > 0
             
             if not has_role:
                 # 如果没有该角色，则分配
-                ExternalJWTProcessor._assign_user_role(user, jwt_payload, db)
+                await ExternalJWTProcessor._assign_user_role(user, jwt_payload, user_repo)
                 
         except Exception as e:
             logger.error(f"Error checking user role: {e}")
@@ -220,23 +255,49 @@ class ExternalJWTProcessor:
         return 'user'
     
     @staticmethod
-    def get_user_from_token(token: str, db: Session) -> Optional[User]:
+    async def get_user_from_token(token: str, user_repo: UserRepository) -> Optional[User]:
         """从token获取用户（带缓存）"""
         try:
             logger.debug(f"Getting user from JWT token")
             
+            # 获取数据库管理器和Redis适配器
+            from src.database.manager import get_database_manager
+            import hashlib
+            import json
+            
+            db_manager = get_database_manager()
+            await db_manager.initialize()
+            redis_adapter = await db_manager.get_redis_adapter()
+            
             # 先尝试从缓存获取
-            permission_cache = get_permission_cache()
-            session_id = permission_cache.cache_jwt_session(token, {})  # 生成session_id
+            session_id = hashlib.md5(token.encode()).hexdigest()
+            session_key = f"jwt_session:{session_id}"
+            
+            cached_session = None
+            if redis_adapter and redis_adapter.is_available:
+                cached_data = await redis_adapter.get(session_key)
+                if cached_data:
+                    try:
+                        cached_session = json.loads(cached_data)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON in JWT session cache: {session_id}")
             
             # 检查会话缓存
-            cached_session = permission_cache.get_jwt_session(session_id)
             if cached_session and cached_session.get('user_id'):
-                # 从数据库获取用户
-                user = db.query(User).filter(
-                    User.external_user_id == cached_session['user_id']
-                ).first()
-                if user:
+                # 从用户仓库获取用户
+                user_info = await user_repo.get_by_external_id(cached_session['user_id'])
+                if user_info:
+                    # 转换为 User 模型对象
+                    user = User(
+                        id=user_info.user_id,
+                        external_user_id=user_info.external_user_id,
+                        username=user_info.username,
+                        display_name=user_info.display_name,
+                        organization=user_info.organization,
+                        is_active=user_info.is_active,
+                        created_at=user_info.created_at,
+                        updated_at=user_info.updated_at
+                    )
                     logger.debug(f"User loaded from cache: {user.username}")
                     return user
             
@@ -247,18 +308,18 @@ class ExternalJWTProcessor:
             
             # 同步用户信息
             logger.debug(f"Syncing user from JWT")
-            user = ExternalJWTProcessor.sync_user_from_jwt(jwt_payload, db)
+            user = await ExternalJWTProcessor.sync_user_from_jwt(jwt_payload, user_repo)
             logger.debug(f"User synced: {user.username if user else 'None'}")
             
-            if user:
+            if user and redis_adapter and redis_adapter.is_available:
                 # 缓存会话
-                permission_cache.cache_jwt_session(token, {
+                session_data = {
                     'user_id': user.external_user_id,
                     'username': user.username,
                     'display_name': user.display_name,
-                    'organization': user.organization,
-                    'region': user.region
-                })
+                    'organization': user.organization
+                }
+                await redis_adapter.set(session_key, json.dumps(session_data), 1800)  # 30分钟缓存
             
             return user
             

@@ -5,10 +5,10 @@ from typing import Set, Optional, Callable
 import re
 import logging
 
-from server.db_manager import db_manager
+from src.database.manager import get_database_manager_dependency, get_user_repository_dependency
+from src.database.repositories.user_repository import UserRepository, UserInfo
 from server.models.user_model import User
 from server.auth.external_jwt_processor import ExternalJWTProcessor, JWTAuthenticationError
-from server.utils.redis_manager import get_permission_cache
 
 logger = logging.getLogger(__name__)
 
@@ -29,25 +29,25 @@ PUBLIC_PATHS = [
     r"^/openapi.json$",             # OpenAPI schema
 ]
 
-# 获取数据库会话
-def get_db():
-    db = db_manager.get_session()
-    try:
-        yield db
-    finally:
-        db.close()
+# 获取数据库会话（保持兼容性）
+async def get_db():
+    """获取数据库会话（兼容性函数）"""
+    db_manager = await get_database_manager_dependency()
+    async with await db_manager.get_postgresql_adapter('server_db').get_session_context() as session:
+        yield session
 
 class RBACMiddleware:
     """RBAC权限中间件"""
     
     def __init__(self):
-        self.permission_cache = get_permission_cache()
+        self.db_manager = None  # 将在需要时初始化
+        self.redis_adapter = None
     
     async def get_current_user(
         self,
         request: Request,
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-        db: Session = Depends(get_db)
+        user_repo: UserRepository = Depends(get_user_repository_dependency)
     ) -> Optional[User]:
         """获取当前用户"""
         
@@ -66,7 +66,7 @@ class RBACMiddleware:
         try:
             # 使用外部JWT处理器获取用户
             logger.debug(f"Processing JWT token for authentication")
-            user = ExternalJWTProcessor.get_user_from_token(token, db)
+            user = await ExternalJWTProcessor.get_user_from_token(token, user_repo)
             
             if not user:
                 logger.warning(f"JWT token processing returned no user")
@@ -101,7 +101,7 @@ class RBACMiddleware:
     
     async def get_required_user(
         self,
-        current_user: Optional[User] = Depends(lambda: rbac_middleware.get_current_user)
+        current_user: Optional[User] = Depends(lambda request, credentials, user_repo: rbac_middleware.get_current_user(request, credentials, user_repo))
     ) -> User:
         """获取已登录用户（抛出401如果未登录）"""
         if current_user is None:
@@ -112,14 +112,42 @@ class RBACMiddleware:
             )
         return current_user
     
-    async def verify_permission(self, user: User, permission: str, db: Session) -> bool:
+    async def verify_permission(self, user: User, permission: str, user_repo: UserRepository = None) -> bool:
         """验证用户权限"""
         if not user:
             return False
         
         try:
+            # 初始化数据库管理器
+            if not self.db_manager:
+                from src.database.manager import get_database_manager
+                self.db_manager = get_database_manager()
+                await self.db_manager.initialize()
+            
+            # 获取Redis适配器用于缓存
+            if not self.redis_adapter:
+                self.redis_adapter = await self.db_manager.get_redis_adapter()
+            
             # 从缓存获取用户权限
-            user_permissions = self.permission_cache.get_user_permissions(str(user.id), db)
+            cache_key = f"user_perms:{user.id}"
+            cached_permissions = None
+            if self.redis_adapter and self.redis_adapter.is_available:
+                cached_permissions = await self.redis_adapter.get(cache_key)
+            
+            if cached_permissions:
+                import json
+                user_permissions = set(json.loads(cached_permissions))
+                logger.debug(f"User {user.id} permissions loaded from cache")
+            else:
+                # 从数据库查询权限
+                user_permissions = await self._query_user_permissions(str(user.id))
+                
+                # 缓存权限
+                if self.redis_adapter and self.redis_adapter.is_available:
+                    import json
+                    await self.redis_adapter.set(cache_key, json.dumps(list(user_permissions)), 3600)
+                
+                logger.debug(f"User {user.id} permissions loaded from database and cached")
             
             # 检查精确权限
             if permission in user_permissions:
@@ -141,14 +169,41 @@ class RBACMiddleware:
             logger.error(f"Permission verification error: {e}")
             return False
     
+    async def _query_user_permissions(self, user_id: str) -> Set[str]:
+        """从数据库查询用户权限"""
+        try:
+            postgres_adapter = await self.db_manager.get_postgresql_adapter('server_db')
+            
+            # 使用原生SQL查询以提高性能 - 支持external_user_id
+            query = """
+                SELECT DISTINCT p.name
+                FROM permissions p
+                JOIN role_permissions rp ON p.id = rp.permission_id
+                JOIN roles r ON rp.role_id = r.id
+                JOIN user_roles ur ON r.id = ur.role_id
+                JOIN users u ON ur.user_id = u.id
+                WHERE (u.external_user_id = :user_id OR u.id::text = :user_id OR u.username = :user_id)
+                AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+            """
+            
+            result = await postgres_adapter.execute_query(query, {"user_id": user_id})
+            permissions = {row[0] for row in result} if result else set()
+            
+            logger.debug(f"Found {len(permissions)} permissions for user {user_id}")
+            return permissions
+            
+        except Exception as e:
+            logger.error(f"Error querying user permissions: {e}")
+            return set()
+    
     def require_permission(self, permission: str):
         """权限依赖注入函数"""
         async def permission_dependency(
             current_user: User = Depends(get_required_user),
-            db: Session = Depends(get_db)
+            user_repo: UserRepository = Depends(get_user_repository_dependency)
         ):
             """检查用户权限的依赖函数"""
-            has_permission = await self.verify_permission(current_user, permission, db)
+            has_permission = await self.verify_permission(current_user, permission, user_repo)
             
             if not has_permission:
                 raise HTTPException(
@@ -180,20 +235,11 @@ class RBACMiddleware:
                         detail="用户未认证"
                     )
                 
-                if not db:
-                    db = db_manager.get_session()
-                    try:
-                        has_any_permission = any(
-                            await self.verify_permission(current_user, perm, db)
-                            for perm in permissions
-                        )
-                    finally:
-                        db.close()
-                else:
-                    has_any_permission = any(
-                        await self.verify_permission(current_user, perm, db)
-                        for perm in permissions
-                    )
+                # 检查任一权限
+                has_any_permission = any(
+                    await self.verify_permission(current_user, perm)
+                    for perm in permissions
+                )
                 
                 if not has_any_permission:
                     raise HTTPException(
@@ -213,16 +259,55 @@ class RBACMiddleware:
                 return True
         return False
     
-    def get_user_permissions(self, user: User, db: Session) -> Set[str]:
+    async def get_user_permissions(self, user: User) -> Set[str]:
         """获取用户所有权限"""
         if not user:
             return set()
         
-        return self.permission_cache.get_user_permissions(str(user.id), db)
+        # 初始化数据库管理器
+        if not self.db_manager:
+            from src.database.manager import get_database_manager
+            self.db_manager = get_database_manager()
+            await self.db_manager.initialize()
+        
+        # 获取Redis适配器用于缓存
+        if not self.redis_adapter:
+            self.redis_adapter = await self.db_manager.get_redis_adapter()
+        
+        # 从缓存获取用户权限
+        cache_key = f"user_perms:{user.id}"
+        cached_permissions = None
+        if self.redis_adapter and self.redis_adapter.is_available:
+            cached_permissions = await self.redis_adapter.get(cache_key)
+        
+        if cached_permissions:
+            import json
+            return set(json.loads(cached_permissions))
+        else:
+            # 从数据库查询权限
+            user_permissions = await self._query_user_permissions(str(user.id))
+            
+            # 缓存权限
+            if self.redis_adapter and self.redis_adapter.is_available:
+                import json
+                await self.redis_adapter.set(cache_key, json.dumps(list(user_permissions)), 3600)
+            
+            return user_permissions
     
-    def invalidate_user_cache(self, user_id: str):
+    async def invalidate_user_cache(self, user_id: str):
         """清除用户权限缓存"""
-        self.permission_cache.invalidate_user_permissions(user_id)
+        # 初始化Redis适配器
+        if not self.redis_adapter:
+            if not self.db_manager:
+                from src.database.manager import get_database_manager
+                self.db_manager = get_database_manager()
+                await self.db_manager.initialize()
+            self.redis_adapter = await self.db_manager.get_redis_adapter()
+        
+        if self.redis_adapter and self.redis_adapter.is_available:
+            cache_key = f"user_perms:{user_id}"
+            await self.redis_adapter.delete(cache_key)
+            logger.debug(f"Invalidated permissions cache for user {user_id}")
 
 
 # 全局RBAC中间件实例
@@ -232,10 +317,10 @@ rbac_middleware = RBACMiddleware()
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
+    user_repo: UserRepository = Depends(get_user_repository_dependency)
 ) -> Optional[User]:
     """获取当前用户"""
-    return await rbac_middleware.get_current_user(request, credentials, db)
+    return await rbac_middleware.get_current_user(request, credentials, user_repo)
 
 async def get_required_user(
     current_user: Optional[User] = Depends(get_current_user)
@@ -254,41 +339,33 @@ def require_any_permission(permissions: list):
 # 兼容性函数（保持与旧版本的兼容）
 async def get_admin_user(current_user: User = Depends(get_required_user)) -> User:
     """获取管理员用户（兼容性函数）"""
-    db = db_manager.get_session()
-    try:
-        admin_permissions = ["user:create", "user:update", "user:delete", "system:config"]
-        has_admin_permission = any(
-            await rbac_middleware.verify_permission(current_user, perm, db)
-            for perm in admin_permissions
+    admin_permissions = ["user:create", "user:update", "user:delete", "system:config"]
+    has_admin_permission = any(
+        await rbac_middleware.verify_permission(current_user, perm)
+        for perm in admin_permissions
+    )
+    
+    if not has_admin_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要管理员权限",
         )
-        
-        if not has_admin_permission:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="需要管理员权限",
-            )
-        
-        return current_user
-    finally:
-        db.close()
+    
+    return current_user
 
 async def get_superadmin_user(current_user: User = Depends(get_required_user)) -> User:
     """获取超级管理员用户（兼容性函数）"""
-    db = db_manager.get_session()
-    try:
-        has_superadmin_permission = await rbac_middleware.verify_permission(
-            current_user, "system:restart", db
+    has_superadmin_permission = await rbac_middleware.verify_permission(
+        current_user, "system:restart"
+    )
+    
+    if not has_superadmin_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要超级管理员权限",
         )
-        
-        if not has_superadmin_permission:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="需要超级管理员权限",
-            )
-        
-        return current_user
-    finally:
-        db.close()
+    
+    return current_user
 
 def is_public_path(path: str) -> bool:
     """检查路径是否为公开路径"""

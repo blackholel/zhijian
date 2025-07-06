@@ -6,23 +6,41 @@ from datetime import datetime, timedelta
 import uuid
 import logging
 
-from server.db_manager import db_manager
+from src.database.manager import get_database_manager_dependency, get_user_repository_dependency
+from src.database.repositories.user_repository import UserRepository
 from server.models.user_model import User, Role, Permission, UserRole, RolePermission
 from server.auth.rbac_middleware import get_required_user, require_permission, rbac_middleware
-from server.utils.redis_manager import get_permission_cache
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rbac", tags=["权限管理"])
 
-# 获取数据库会话
+# 获取数据库会话（兼容性）
 def get_db():
+    """获取数据库会话（兼容性函数）"""
+    from server.db_manager import db_manager
     db = db_manager.get_session()
     try:
         yield db
     finally:
         db.close()
+
+# 获取Redis适配器用于缓存清除
+async def invalidate_user_permissions_cache():
+    """清除所有用户权限缓存"""
+    try:
+        from src.database.manager import get_database_manager
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        redis_adapter = await db_manager.get_redis_adapter()
+        
+        if redis_adapter and redis_adapter.is_available:
+            # 清除所有用户权限缓存
+            await redis_adapter.delete_pattern("user_perms:*")
+            logger.debug("Invalidated all user permissions cache")
+    except Exception as e:
+        logger.warning(f"Failed to invalidate user permissions cache: {e}")
 
 # Pydantic模型
 class RoleCreate(BaseModel):
@@ -402,9 +420,11 @@ async def assign_role_permission(
         db.commit()
         
         # 清除相关缓存
-        permission_cache = get_permission_cache()
-        permission_cache.invalidate_role_permissions(assignment.role_id)
-        permission_cache.invalidate_all_user_permissions()
+        try:
+            import asyncio
+            asyncio.create_task(invalidate_user_permissions_cache())
+        except Exception as e:
+            logger.warning(f"Failed to invalidate cache: {e}")
         
         logger.info(f"Permission {permission.name} assigned to role {role.name} by {current_user.username}")
         return {"message": "权限分配成功"}
@@ -439,9 +459,11 @@ async def revoke_role_permission(
         db.commit()
         
         # 清除相关缓存
-        permission_cache = get_permission_cache()
-        permission_cache.invalidate_role_permissions(role_id)
-        permission_cache.invalidate_all_user_permissions()
+        try:
+            import asyncio
+            asyncio.create_task(invalidate_user_permissions_cache())
+        except Exception as e:
+            logger.warning(f"Failed to invalidate cache: {e}")
         
         logger.info(f"Permission revoked from role {role_id} by {current_user.username}")
         return {"message": "权限撤销成功"}
