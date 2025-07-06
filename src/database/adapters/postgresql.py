@@ -255,10 +255,11 @@ class PostgreSQLAdapter(SQLDatabaseAdapter):
         
         def _sync_execute():
             with self.engine.connect() as conn:
-                result = conn.execute(text(query), params or {})
-                if result.returns_rows:
-                    return result.fetchall()
-                return result.rowcount
+                with conn.begin():  # 确保在事务中执行
+                    result = conn.execute(text(query), params or {})
+                    if result.returns_rows:
+                        return result.fetchall()
+                    return result.rowcount
         
         try:
             return await asyncio.get_event_loop().run_in_executor(None, _sync_execute)

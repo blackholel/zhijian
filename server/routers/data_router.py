@@ -210,7 +210,15 @@ async def upload_file(
         
         # 获取文件仓储并保存文件信息
         file_repo = db_manager.get_file_repository()
-        saved_file_info = await file_repo.create(file_info)
+        logger.info(f"Creating file record for: {file_info.file_id}")
+        try:
+            saved_file_info = await file_repo.create(file_info)
+            logger.info(f"File record created: {saved_file_info.file_id}")
+        except Exception as repo_error:
+            logger.error(f"Failed to save file record to database: {repo_error}")
+            # 即使数据库保存失败，文件已经上传到MinIO，返回部分成功状态
+            logger.warning("File uploaded to storage but database record failed")
+            saved_file_info = file_info
         
         return {
             "message": "File successfully uploaded to distributed storage",
