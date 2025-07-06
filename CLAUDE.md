@@ -59,6 +59,7 @@ pnpm dev
 ### 访问地址
 - **Web应用**: http://localhost:5173
 - **API文档**: http://localhost:5050/docs
+- **数据库管理API**: http://localhost:5050/api/database/
 - **Neo4j浏览器**: http://localhost:7474
 - **MinIO控制台**: http://localhost:9001 (admin/minioadmin)
 
@@ -67,6 +68,8 @@ pnpm dev
 ### 核心组件
 - **server/**: FastAPI后端，提供认证、对话和图谱API
 - **src/**: 核心应用逻辑，包括代理、模型和插件
+  - **src/database/**: 统一数据库管理系统
+  - **src/file/**: 文件管理系统
 - **web/**: Vue.js前端，提供图谱可视化和对话界面
 
 ### 关键技术栈
@@ -126,6 +129,8 @@ pnpm dev
 - 使用FastAPI异步模式
 - **权限认证**: 统一使用 `server/auth/rbac_middleware.py` 进行JWT认证和权限验证
 - **权限框架**: 位于 `server/auth/permission_framework/` 的完整权限管理系统
+- **数据库访问**: 使用 `src/database/` 统一数据库管理系统
+- **文件管理**: 使用 `src/file/` 文件管理系统
 - 数据库模型位于 `server/models/`
 - API路由位于 `server/routers/`
 
@@ -156,6 +161,30 @@ pnpm dev
 1. 更新 `server/models/` 中的模型
 2. 根据需要创建迁移脚本
 3. 更新 `server/routers/` 中的API端点
+4. 使用新的数据库管理系统 `src/database/` 访问数据
+
+### 使用新的数据库管理系统
+1. 获取数据库管理器：
+   ```python
+   from src.database.manager import get_database_manager
+   db_manager = get_database_manager()
+   await db_manager.initialize()
+   ```
+2. 获取适配器：
+   ```python
+   postgres_adapter = await db_manager.get_postgresql_adapter('server_db')
+   redis_adapter = await db_manager.get_redis_adapter()
+   ```
+3. 使用仓储模式：
+   ```python
+   user_repo = db_manager.get_user_repository()
+   knowledge_repo = db_manager.get_knowledge_repository()
+   ```
+
+### 使用文件管理系统
+1. 文件管理器已弃用，改用新的数据库架构
+2. 使用 `src/database/repositories/file_repository.py` 管理文件元数据
+3. 使用 `src/database/adapters/minio.py` 管理文件存储
 
 
 
@@ -352,6 +381,16 @@ python generate_token.py decode <token>
 
 ### API接口
 
+#### 数据库管理接口
+- `GET /api/database/health` - 获取数据库健康状态
+- `GET /api/database/connections` - 获取数据库连接状态（管理员权限）
+- `GET /api/database/adapters` - 获取数据库适配器信息（管理员权限）
+- `POST /api/database/reconnect` - 重连所有数据库（超级管理员权限）
+- `GET /api/database/config` - 获取数据库配置信息（管理员权限）
+- `GET /api/database/repositories` - 获取仓储状态（管理员权限）
+- `GET /api/database/users/count` - 获取用户数量
+- `GET /api/database/users/statistics` - 获取用户统计（管理员权限）
+
 #### RBAC管理接口
 - `GET /api/rbac/roles` - 获取角色列表
 - `POST /api/rbac/roles` - 创建角色
@@ -475,6 +514,13 @@ cache.invalidate_all_user_permissions()
 #### 调试命令
 
 ```bash
+# 检查数据库健康状态
+curl http://localhost:5050/api/database/health
+
+# 检查数据库连接状态（需要管理员权限）
+curl -H "Authorization: Bearer <token>" \
+     http://localhost:5050/api/database/connections
+
 # 检查用户权限
 curl -H "Authorization: Bearer <token>" \
      http://localhost:5050/api/rbac/users/<user_id>/permissions
