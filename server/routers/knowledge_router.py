@@ -41,7 +41,6 @@ def get_user_id(user: User) -> str:
 # 知识库管理接口
 
 @knowledge_router.get("/databases")
-@require_system_permission(Permission.READ)
 async def list_knowledge_bases(
     current_user: User = Depends(get_required_user)
 ) -> Dict[str, Any]:

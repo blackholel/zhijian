@@ -1,5 +1,7 @@
 import jwt
 import json
+import uuid
+import hashlib
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
@@ -13,6 +15,17 @@ logger = logging.getLogger(__name__)
 
 class ExternalJWTProcessor:
     """外部JWT处理器"""
+    
+    @staticmethod
+    def generate_uuid_from_external_id(external_id: str) -> str:
+        """从外部ID生成确定性UUID"""
+        # 使用SHA-256创建确定性UUID
+        hash_object = hashlib.sha256(external_id.encode('utf-8'))
+        hash_hex = hash_object.hexdigest()
+        
+        # 将哈希值转换为UUID格式
+        uuid_str = f"{hash_hex[:8]}-{hash_hex[8:12]}-{hash_hex[12:16]}-{hash_hex[16:20]}-{hash_hex[20:32]}"
+        return uuid_str
     
     @staticmethod
     def decode_external_jwt(token: str) -> Dict[str, Any]:
@@ -76,10 +89,13 @@ class ExternalJWTProcessor:
                 )
             
             if not user:
-                # 创建新用户
+                # 创建新用户，为外部用户ID生成确定性UUID
+                external_id = jwt_payload['user_id']
+                uuid_from_external = ExternalJWTProcessor.generate_uuid_from_external_id(external_id)
+                
                 new_user_info = UserInfo(
-                    user_id=jwt_payload['user_id'],
-                    external_user_id=jwt_payload['user_id'],
+                    user_id=uuid_from_external,
+                    external_user_id=external_id,
                     username=jwt_payload['username'],
                     display_name=jwt_payload.get('display_name'),
                     organization=jwt_payload.get('organization'),
@@ -93,6 +109,17 @@ class ExternalJWTProcessor:
                 
                 try:
                     created_user_info = await user_repo.create(new_user_info)
+                    # 转换为User对象
+                    user = User(
+                        id=created_user_info.user_id,
+                        external_user_id=created_user_info.external_user_id,
+                        username=created_user_info.username,
+                        display_name=created_user_info.display_name,
+                        organization=created_user_info.organization,
+                        is_active=created_user_info.is_active,
+                        created_at=created_user_info.created_at,
+                        updated_at=created_user_info.updated_at
+                    )
                 except ValueError as e:
                     if "User already exists" in str(e):
                         # 用户已存在，重新获取
