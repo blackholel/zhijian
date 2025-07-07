@@ -190,10 +190,9 @@ async def upload_document(
     kb_id: str,
     file: UploadFile = File(...),
     metadata: Optional[str] = Body(None),
-    use_minio: bool = Query(True, description="是否使用MinIO存储"),
     current_user: User = Depends(get_required_user)
 ) -> Dict[str, Any]:
-    """上传文档到知识库（支持MinIO和本地存储）"""
+    """上传文档到知识库（仅支持MinIO存储）"""
     try:
         kb_manager = await get_kb_manager()
         user_id = get_user_id(current_user)
@@ -216,40 +215,34 @@ async def upload_document(
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="元数据格式错误")
         
-        # 新增：支持MinIO存储
-        if use_minio:
-            from src.database.manager import get_database_manager
-            import hashlib
-            import os
-            from datetime import datetime
-            
-            db_manager = get_database_manager()
-            await db_manager.initialize()
-            minio_adapter = await db_manager.get_minio_adapter()
-            
-            # 生成唯一文件名和MinIO存储路径
-            basename, ext = os.path.splitext(file.filename)
-            file_id = hashlib.sha256(f"{kb_id}:{file.filename}:{datetime.now().isoformat()}".encode()).hexdigest()[:32]
-            storage_key = f"knowledge_bases/{kb_id}/documents/{file_id}/{file.filename}"
-            
-            # 上传到MinIO
-            await minio_adapter.upload_bytes(file_content, storage_key)
-            
-            # 使用MinIO路径创建知识库文件记录
-            uploaded_file = await kb_manager.upload_document_minio(
-                kb_id, storage_key, file.filename, file_type, user_id, file_metadata, file_id, len(file_content)
-            )
-        else:
-            # 原有的本地存储方式
-            uploaded_file = await kb_manager.upload_document(
-                kb_id, file_content, file.filename, file_type, user_id, file_metadata
-            )
+        # 使用MinIO存储
+        from src.database.manager import get_database_manager
+        import hashlib
+        import os
+        from datetime import datetime
+        
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        minio_adapter = await db_manager.get_minio_adapter()
+        
+        # 生成唯一文件名和MinIO存储路径
+        basename, ext = os.path.splitext(file.filename)
+        file_id = hashlib.sha256(f"{kb_id}:{file.filename}:{datetime.now().isoformat()}".encode()).hexdigest()[:32]
+        storage_key = f"knowledge_bases/{kb_id}/documents/{file_id}/{file.filename}"
+        
+        # 上传到MinIO
+        await minio_adapter.upload_bytes(file_content, storage_key)
+        
+        # 使用MinIO路径创建知识库文件记录
+        uploaded_file = await kb_manager.upload_document(
+            kb_id, storage_key, file.filename, file_type, user_id, file_metadata, file_id, len(file_content)
+        )
         
         return {
             "message": "文档上传成功",
             "file": uploaded_file.to_dict(),
             "status": "success",
-            "storage_type": "minio" if use_minio else "local"
+            "storage_type": "minio"
         }
         
     except PermissionError as e:
@@ -317,7 +310,7 @@ async def download_file(
     file_id: str,
     current_user: User = Depends(get_required_user)
 ):
-    """下载文件（支持MinIO和本地存储）"""
+    """下载文件（仅支持MinIO存储）"""
     try:
         kb_manager = await get_kb_manager()
         user_id = get_user_id(current_user)
@@ -327,39 +320,23 @@ async def download_file(
         if not file_obj:
             raise HTTPException(status_code=404, detail="文件不存在")
         
-        storage_type = getattr(file_obj, 'storage_type', 'local')
+        # 从MinIO下载
+        from src.database.manager import get_database_manager
+        from fastapi.responses import StreamingResponse
+        import io
         
-        if storage_type == 'minio':
-            # 从MinIO下载
-            from src.database.manager import get_database_manager
-            from fastapi.responses import StreamingResponse
-            import io
-            
-            db_manager = get_database_manager()
-            await db_manager.initialize()
-            minio_adapter = await db_manager.get_minio_adapter()
-            
-            # 获取文件内容
-            file_content = await minio_adapter.download_bytes(file_obj.path)
-            
-            return StreamingResponse(
-                io.BytesIO(file_content),
-                media_type=file_obj.file_type,
-                headers={"Content-Disposition": f"attachment; filename={file_obj.filename}"}
-            )
-        else:
-            # 从本地文件系统下载
-            from fastapi.responses import FileResponse
-            import os
-            
-            if not os.path.exists(file_obj.path):
-                raise HTTPException(status_code=404, detail="文件不存在")
-            
-            return FileResponse(
-                path=file_obj.path,
-                filename=file_obj.filename,
-                media_type=file_obj.file_type
-            )
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        minio_adapter = await db_manager.get_minio_adapter()
+        
+        # 获取文件内容
+        file_content = await minio_adapter.download_bytes(file_obj.path)
+        
+        return StreamingResponse(
+            io.BytesIO(file_content),
+            media_type=file_obj.file_type,
+            headers={"Content-Disposition": f"attachment; filename={file_obj.filename}"}
+        )
         
     except HTTPException:
         raise

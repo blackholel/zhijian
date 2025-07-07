@@ -187,11 +187,11 @@ pnpm dev
 
 #### 知识库文件管理（主要接口）
 - **上传**: `POST /api/knowledge/databases/{kb_id}/upload`
-  - 支持MinIO和本地存储（通过 `use_minio` 参数控制）
+  - 仅支持MinIO存储
   - 自动集成到知识库系统
   - 支持异步文档处理
 - **下载**: `GET /api/knowledge/files/{file_id}/download`
-  - 自动识别存储类型（MinIO/本地）
+  - 仅支持MinIO存储
   - 统一下载接口
 - **列表**: `GET /api/knowledge/databases/{kb_id}/files`
 - **详情**: `GET /api/knowledge/files/{file_id}`
@@ -199,7 +199,7 @@ pnpm dev
 #### 数据库字段更新
 ```sql
 -- knowledge_files表新增字段
-storage_type VARCHAR(20) DEFAULT 'local'  -- 存储类型：local, minio
+storage_type VARCHAR(20) DEFAULT 'minio'  -- 存储类型：minio
 file_size INTEGER                          -- 文件大小
 file_metadata JSONB                        -- 文件元数据
 ```

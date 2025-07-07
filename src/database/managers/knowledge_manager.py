@@ -177,11 +177,11 @@ class KnowledgeBaseManager:
     
     # 文件管理方法
     
-    async def upload_document_minio(self, kb_id: str, storage_key: str,
-                                  filename: str, file_type: str, user_id: str,
-                                  metadata: Dict[str, Any] = None, file_id: str = None,
-                                  file_size: int = 0) -> KnowledgeFile:
-        """上传文档到MinIO - 新的统一方法"""
+    async def upload_document(self, kb_id: str, storage_key: str,
+                            filename: str, file_type: str, user_id: str,
+                            metadata: Dict[str, Any] = None, file_id: str = None,
+                            file_size: int = 0) -> KnowledgeFile:
+        """上传文档到MinIO"""
         try:
             # 1. 权限检查
             has_permission = await self.kb_repo._check_kb_permission(kb_id, user_id, 'write')
@@ -229,56 +229,6 @@ class KnowledgeBaseManager:
             logger.error(f"MinIO文档上传失败: {e}")
             raise
     
-    async def upload_document(self, kb_id: str, file_data: bytes, 
-                            filename: str, file_type: str,
-                            user_id: str, metadata: Dict[str, Any] = None) -> KnowledgeFile:
-        """上传文档 - 完整处理流程"""
-        try:
-            # 1. 权限检查
-            has_permission = await self.kb_repo._check_kb_permission(kb_id, user_id, 'write')
-            if not has_permission:
-                raise PermissionError("没有上传权限")
-            
-            # 2. 生成文件ID和路径
-            file_id = str(uuid.uuid4()).replace('-', '')
-            file_path = f"saves/lightrag_data/{kb_id}/uploads/{filename}"
-            
-            # 3. 创建文件记录
-            file_record_data = {
-                'file_id': file_id,
-                'filename': filename,
-                'path': file_path,
-                'file_type': file_type,
-                'status': 'uploading'
-            }
-            
-            file_obj = await self.file_repo.create(file_record_data, kb_id, user_id)
-            
-            # 4. 保存文件到存储（这里应该集成MinIO或文件系统）
-            # TODO: 集成文件存储系统
-            
-            # 5. 更新文件状态为已上传
-            await self.file_repo.update_file_status(file_id, 'uploaded')
-            
-            # 6. 异步启动文档处理（传递file_id而不是对象）
-            asyncio.create_task(self._process_document_async(file_id, user_id))
-            
-            # 记录审计
-            await AuditLogger.log_access_attempt(
-                user_id, 'file', file_id, 'upload', True,
-                {'filename': filename, 'kb_id': kb_id}
-            )
-            
-            logger.info(f"文档上传成功: {filename} -> {file_id}")
-            return file_obj
-            
-        except Exception as e:
-            await AuditLogger.log_access_attempt(
-                user_id, 'file', 'unknown', 'upload', False,
-                {'error': str(e), 'filename': filename}
-            )
-            logger.error(f"文档上传失败: {e}")
-            raise
     
     async def _process_document_async(self, file_id: str, user_id: str):
         """异步文档处理"""
