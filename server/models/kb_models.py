@@ -10,6 +10,7 @@ from server.models import Base
 class KnowledgeDatabase(Base):
     """知识库模型"""
     __tablename__ = 'knowledge_databases'
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     db_id = Column(String, nullable=False, unique=True, index=True)  # 数据库ID
@@ -31,34 +32,53 @@ class KnowledgeDatabase(Base):
 
     def to_dict(self, with_nodes=True):
         """转换为字典格式，确保meta_info映射为metadata"""
-        result = {
-            "id": self.id,
-            "db_id": self.db_id,
-            "name": self.name,
-            "description": self.description,
-            "embed_model": self.embed_model,
-            "dimension": self.dimension,
-            "metadata": self.meta_info or {},
-            "created_at": self.created_at.isoformat() if self.created_at else None
-        }
-        # 添加文件信息
-        if self.files:
-            result["files"] = {file.file_id: file.to_dict(with_nodes=with_nodes) for file in self.files}
-        else:
-            result["files"] = {}
-        return result
+        try:
+            result = {
+                "id": getattr(self, 'id', None),
+                "db_id": getattr(self, 'db_id', None),
+                "name": getattr(self, 'name', None),
+                "description": getattr(self, 'description', None),
+                "embed_model": getattr(self, 'embed_model', None),
+                "dimension": getattr(self, 'dimension', None),
+                "metadata": getattr(self, 'meta_info', None) or {},
+                "created_at": getattr(self, 'created_at', None).isoformat() if getattr(self, 'created_at', None) else None,
+                "owner_id": str(getattr(self, 'owner_id', None)) if getattr(self, 'owner_id', None) else None,
+                "is_public": getattr(self, 'is_public', False),
+                "access_level": getattr(self, 'access_level', 'private')
+            }
+            # 添加文件信息
+            files_attr = getattr(self, 'files', None)
+            if files_attr:
+                result["files"] = {file.file_id: file.to_dict(with_nodes=with_nodes) for file in files_attr}
+            else:
+                result["files"] = {}
+            return result
+        except Exception as e:
+            # 如果出现属性访问错误，返回基本信息
+            return {
+                "id": getattr(self, 'id', None),
+                "db_id": getattr(self, 'db_id', None),
+                "name": getattr(self, 'name', 'Unknown'),
+                "description": getattr(self, 'description', None),
+                "metadata": {},
+                "files": {}
+            }
 
 class KnowledgeFile(Base):
     """知识库文件模型"""
     __tablename__ = 'knowledge_files'
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     file_id = Column(String, nullable=False, unique=True, index=True)  # 文件ID
     database_id = Column(String, ForeignKey('knowledge_databases.db_id'), nullable=False)  # 所属数据库ID
     filename = Column(String, nullable=False)  # 文件名
-    path = Column(String, nullable=False)  # 文件路径
+    path = Column(String, nullable=False)  # 文件路径（本地路径或MinIO存储键）
     file_type = Column(String, nullable=False)  # 文件类型
     status = Column(String, nullable=False)  # 处理状态
+    storage_type = Column(String, default='local')  # 存储类型：local, minio
+    file_size = Column(Integer, nullable=True)  # 文件大小
+    file_metadata = Column(JSON, nullable=True)  # 文件元数据 (避免与SQLAlchemy的metadata冲突)
     created_at = Column(DateTime, default=func.now())  # 创建时间
     
     # 权限相关字段
@@ -75,22 +95,45 @@ class KnowledgeFile(Base):
 
     def to_dict(self, with_nodes=True):
         """转换为字典格式"""
-        result = {
-            "file_id": self.file_id,
-            "filename": self.filename,
-            "path": self.path,
-            "type": self.file_type,
-            "status": self.status,
-            "node_count": self.computed_node_count,
-            "created_at": self.created_at.timestamp() if self.created_at else time.time()
-        }
-        if with_nodes:
-            result["nodes"] = [node.to_dict() for node in self.nodes] if self.nodes else []
-        return result
+        try:
+            result = {
+                "file_id": getattr(self, 'file_id', None),
+                "filename": getattr(self, 'filename', None),
+                "path": getattr(self, 'path', None),
+                "type": getattr(self, 'file_type', None),
+                "status": getattr(self, 'status', 'unknown'),
+                "storage_type": getattr(self, 'storage_type', 'local'),
+                "file_size": getattr(self, 'file_size', None),
+                "metadata": getattr(self, 'file_metadata', None) or {},
+                "node_count": self.computed_node_count,
+                "created_at": getattr(self, 'created_at', None).timestamp() if getattr(self, 'created_at', None) else time.time(),
+                "uploaded_by": str(getattr(self, 'uploaded_by', None)) if getattr(self, 'uploaded_by', None) else None,
+                "database_id": getattr(self, 'database_id', None)
+            }
+            if with_nodes:
+                nodes_attr = getattr(self, 'nodes', None)
+                if nodes_attr:
+                    result["nodes"] = [node.to_dict() for node in nodes_attr]
+                else:
+                    result["nodes"] = []
+            return result
+        except Exception as e:
+            # 如果出现属性访问错误，返回基本信息
+            return {
+                "file_id": getattr(self, 'file_id', None),
+                "filename": getattr(self, 'filename', 'Unknown'),
+                "path": getattr(self, 'path', None),
+                "type": getattr(self, 'file_type', 'unknown'),
+                "status": getattr(self, 'status', 'unknown'),
+                "node_count": 0,
+                "created_at": time.time(),
+                "nodes": []
+            }
 
 class KnowledgeNode(Base):
     """知识块模型"""
     __tablename__ = 'knowledge_nodes'
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     file_id = Column(String, ForeignKey('knowledge_files.file_id'), nullable=False)  # 所属文件ID
@@ -119,6 +162,7 @@ class KnowledgeNode(Base):
 class KnowledgeDatabasePermission(Base):
     """知识库权限模型 - 支持细粒度权限控制"""
     __tablename__ = 'knowledge_database_permissions'
+    __table_args__ = {'extend_existing': True}
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     database_id = Column(String, ForeignKey('knowledge_databases.db_id', ondelete='CASCADE'), nullable=False)

@@ -177,6 +177,58 @@ class KnowledgeBaseManager:
     
     # 文件管理方法
     
+    async def upload_document_minio(self, kb_id: str, storage_key: str,
+                                  filename: str, file_type: str, user_id: str,
+                                  metadata: Dict[str, Any] = None, file_id: str = None,
+                                  file_size: int = 0) -> KnowledgeFile:
+        """上传文档到MinIO - 新的统一方法"""
+        try:
+            # 1. 权限检查
+            has_permission = await self.kb_repo._check_kb_permission(kb_id, user_id, 'write')
+            if not has_permission:
+                raise PermissionError("没有上传权限")
+            
+            # 2. 使用提供的file_id或生成新的
+            if not file_id:
+                file_id = str(uuid.uuid4()).replace('-', '')
+            
+            # 3. 创建文件记录（使用MinIO存储路径）
+            file_record_data = {
+                'file_id': file_id,
+                'filename': filename,
+                'path': storage_key,  # 使用MinIO存储键作为路径
+                'file_type': file_type,
+                'status': 'uploaded',  # MinIO已上传，直接设为uploaded
+                'metadata': {
+                    **(metadata or {}),
+                    'storage_type': 'minio',
+                    'file_size': file_size,
+                    'storage_key': storage_key
+                }
+            }
+            
+            file_obj = await self.file_repo.create(file_record_data, kb_id, user_id)
+            
+            # 4. 异步启动文档处理（传递file_id而不是对象）
+            asyncio.create_task(self._process_document_async(file_id, user_id))
+            
+            # 记录审计
+            await AuditLogger.log_access_attempt(
+                user_id, 'file', file_id, 'upload', True,
+                {'filename': filename, 'kb_id': kb_id, 'storage_type': 'minio'}
+            )
+            
+            logger.info(f"MinIO文档上传成功: {filename} -> {file_id}")
+            return file_obj
+            
+        except Exception as e:
+            await AuditLogger.log_access_attempt(
+                user_id, 'file', 'unknown', 'upload', False,
+                {'error': str(e), 'filename': filename, 'storage_type': 'minio'}
+            )
+            logger.error(f"MinIO文档上传失败: {e}")
+            raise
+    
     async def upload_document(self, kb_id: str, file_data: bytes, 
                             filename: str, file_type: str,
                             user_id: str, metadata: Dict[str, Any] = None) -> KnowledgeFile:
@@ -208,8 +260,8 @@ class KnowledgeBaseManager:
             # 5. 更新文件状态为已上传
             await self.file_repo.update_file_status(file_id, 'uploaded')
             
-            # 6. 异步启动文档处理
-            asyncio.create_task(self._process_document_async(file_obj, user_id))
+            # 6. 异步启动文档处理（传递file_id而不是对象）
+            asyncio.create_task(self._process_document_async(file_id, user_id))
             
             # 记录审计
             await AuditLogger.log_access_attempt(
@@ -228,11 +280,15 @@ class KnowledgeBaseManager:
             logger.error(f"文档上传失败: {e}")
             raise
     
-    async def _process_document_async(self, file_obj: KnowledgeFile, user_id: str):
+    async def _process_document_async(self, file_id: str, user_id: str):
         """异步文档处理"""
         try:
             # 更新状态为处理中
-            await self.file_repo.update_file_status(file_obj.file_id, 'processing')
+            await self.file_repo.update_file_status(file_id, 'processing')
+            
+            # 获取文件信息（用于日志）
+            file_obj = await self.file_repo.get_by_id(file_id, user_id, check_permission=False)
+            filename = file_obj.filename if file_obj else file_id
             
             # TODO: 集成文档处理功能
             # 1. OCR处理（如果是图片）
@@ -247,13 +303,13 @@ class KnowledgeBaseManager:
             # 创建示例节点数据
             nodes_data = [
                 {
-                    'text': f"文档 {file_obj.filename} 的内容块 1",
+                    'text': f"文档 {filename} 的内容块 1",
                     'start_char_idx': 0,
                     'end_char_idx': 100,
                     'metadata': {'chunk_index': 0}
                 },
                 {
-                    'text': f"文档 {file_obj.filename} 的内容块 2",
+                    'text': f"文档 {filename} 的内容块 2",
                     'start_char_idx': 100,
                     'end_char_idx': 200,
                     'metadata': {'chunk_index': 1}
@@ -261,16 +317,16 @@ class KnowledgeBaseManager:
             ]
             
             # 批量创建节点
-            await self.node_repo.batch_create(nodes_data, file_obj.file_id, user_id)
+            await self.node_repo.batch_create(nodes_data, file_id, user_id)
             
             # 更新文件状态为完成
-            await self.file_repo.update_file_status(file_obj.file_id, 'completed')
+            await self.file_repo.update_file_status(file_id, 'completed')
             
-            logger.info(f"文档处理完成: {file_obj.file_id}")
+            logger.info(f"文档处理完成: {file_id}")
             
         except Exception as e:
             # 更新状态为失败
-            await self.file_repo.update_file_status(file_obj.file_id, 'failed')
+            await self.file_repo.update_file_status(file_id, 'failed')
             logger.error(f"文档处理失败: {e}")
     
     async def get_file_details(self, file_id: str, user_id: str, 

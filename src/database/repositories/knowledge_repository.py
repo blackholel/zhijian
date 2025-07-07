@@ -137,6 +137,14 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
                     if not has_permission:
                         return None
                 
+                # 预加载关系属性并分离对象
+                _ = kb.owner_id  # 确保owner_id已加载
+                _ = kb.files  # 触发加载files关系
+                _ = kb.permissions  # 触发加载permissions关系
+                
+                # 从Session中分离对象，使其独立于Session
+                session.expunge(kb)
+                
                 # 缓存结果
                 await self._set_to_cache(cache_key, kb)
                 
@@ -169,6 +177,14 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
                 
                 session.commit()
                 session.refresh(kb)
+                
+                # 预加载关系属性并分离对象
+                _ = kb.owner_id  # 确保owner_id已加载
+                _ = kb.files  # 触发加载files关系
+                _ = kb.permissions  # 触发加载permissions关系
+                
+                # 从Session中分离对象，使其独立于Session
+                session.expunge(kb)
                 
                 # 清除缓存
                 await self._delete_from_cache(f"kb:{kb_id}")
@@ -216,7 +232,18 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
         """查找所有知识库（仅超级管理员）"""
         try:
             async with await self.get_session() as session:
-                kbs = session.query(KnowledgeDatabase).offset(offset).limit(limit).all()
+                kbs = session.query(KnowledgeDatabase).options(
+                    selectinload(KnowledgeDatabase.files),
+                    selectinload(KnowledgeDatabase.permissions)
+                ).offset(offset).limit(limit).all()
+                
+                # 预加载关系属性并分离对象
+                for kb in kbs:
+                    _ = kb.owner_id  # 确保owner_id已加载
+                    _ = kb.files  # 触发加载files关系
+                    _ = kb.permissions  # 触发加载permissions关系
+                    session.expunge(kb)
+                
                 return kbs
         except Exception as e:
             logger.error(f"查找所有知识库失败: {e}")
@@ -238,7 +265,7 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
                 ).all()
                 
                 # 查询用户有权限的共享知识库
-                shared_kb_ids = session.query(KnowledgeDatabasePermission.database_id).filter(
+                shared_kb_ids_query = session.query(KnowledgeDatabasePermission.database_id).filter(
                     and_(
                         KnowledgeDatabasePermission.user_id == user_id,
                         or_(
@@ -249,7 +276,7 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
                 ).subquery()
                 
                 shared_kbs = session.query(KnowledgeDatabase).filter(
-                    KnowledgeDatabase.db_id.in_(shared_kb_ids)
+                    KnowledgeDatabase.db_id.in_(session.query(shared_kb_ids_query.c.database_id))
                 ).all()
                 
                 # 查询公开知识库
@@ -257,12 +284,21 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
                     KnowledgeDatabase.is_public == True
                 ).all()
                 
-                # 合并去重
+                # 合并去重，并预加载关系属性，避免会话关闭后的lazy loading问题
                 all_kbs = {}
                 for kb in owned_kbs + shared_kbs + public_kbs:
+                    # 预加载关系属性
+                    _ = kb.owner_id  # 确保owner_id已加载
+                    _ = kb.files  # 触发加载files关系
+                    _ = kb.permissions  # 触发加载permissions关系
+                    
                     all_kbs[kb.db_id] = kb
                 
                 result = list(all_kbs.values())
+                
+                # 从Session中分离对象，使其独立于Session
+                for kb in result:
+                    session.expunge(kb)
                 
                 # 缓存结果
                 await self._set_to_cache(cache_key, result, ttl=1800)  # 30分钟缓存

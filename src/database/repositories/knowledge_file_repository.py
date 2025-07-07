@@ -76,12 +76,23 @@ class KnowledgeFileRepository(PostgreSQLRepository[KnowledgeFile]):
                     path=file_data['path'],
                     file_type=file_data.get('file_type', 'unknown'),
                     status=file_data.get('status', 'uploading'),
+                    storage_type=file_data.get('storage_type', 'local'),
+                    file_size=file_data.get('file_size'),
+                    file_metadata=file_data.get('metadata'),
                     uploaded_by=uploaded_by
                 )
                 
                 session.add(file_obj)
                 session.commit()
                 session.refresh(file_obj)
+                
+                # 预加载关系属性并分离对象
+                _ = file_obj.database_id  # 确保database_id已加载
+                _ = file_obj.uploaded_by  # 确保uploaded_by已加载
+                _ = file_obj.nodes  # 触发加载nodes关系
+                
+                # 从Session中分离对象，使其独立于Session
+                session.expunge(file_obj)
                 
                 # 清除相关缓存
                 await self._delete_from_cache(f"kb_files:{database_id}")
@@ -123,6 +134,14 @@ class KnowledgeFileRepository(PostgreSQLRepository[KnowledgeFile]):
                     has_permission = await self._check_file_permission(file_id, user_id, 'read')
                     if not has_permission:
                         return None
+                
+                # 预加载关系属性并分离对象
+                _ = file_obj.database_id  # 确保database_id已加载
+                _ = file_obj.uploaded_by  # 确保uploaded_by已加载
+                _ = file_obj.nodes  # 触发加载nodes关系
+                
+                # 从Session中分离对象，使其独立于Session
+                session.expunge(file_obj)
                 
                 # 缓存结果
                 await self._set_to_cache(cache_key, file_obj)

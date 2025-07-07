@@ -299,21 +299,25 @@ class ExternalJWTProcessor:
             
             cached_session = None
             if redis_adapter and redis_adapter.is_available:
-                cached_data = await redis_adapter.get(session_key)
-                if cached_data:
-                    try:
-                        # 检查cached_data是否已经是dict对象
-                        if isinstance(cached_data, dict):
-                            cached_session = cached_data
-                        elif isinstance(cached_data, (str, bytes)):
-                            cached_session = json.loads(cached_data)
-                        else:
-                            logger.warning(f"Unexpected cached_data type: {type(cached_data)}")
-                            cached_session = None
-                    except json.JSONDecodeError:
-                        logger.warning(f"Invalid JSON in JWT session cache: {session_id}")
-                    except Exception as e:
-                        logger.warning(f"Error processing cached session data: {e}")
+                try:
+                    cached_data = await redis_adapter.get(session_key)
+                    if cached_data:
+                        try:
+                            # 检查cached_data是否已经是dict对象
+                            if isinstance(cached_data, dict):
+                                cached_session = cached_data
+                            elif isinstance(cached_data, (str, bytes)):
+                                cached_session = json.loads(cached_data)
+                            else:
+                                logger.warning(f"Unexpected cached_data type: {type(cached_data)}")
+                                cached_session = None
+                        except json.JSONDecodeError:
+                            logger.warning(f"Invalid JSON in JWT session cache: {session_id}")
+                        except Exception as e:
+                            logger.warning(f"Error processing cached session data: {e}")
+                except Exception as e:
+                    logger.warning(f"Redis get operation failed, skipping cache: {e}")
+                    cached_session = None
             
             # 检查会话缓存
             if cached_session and cached_session.get('user_id'):
@@ -345,14 +349,17 @@ class ExternalJWTProcessor:
             logger.debug(f"User synced: {user.username if user else 'None'}")
             
             if user and redis_adapter and redis_adapter.is_available:
-                # 缓存会话
-                session_data = {
-                    'user_id': user.external_user_id,
-                    'username': user.username,
-                    'display_name': user.display_name,
-                    'organization': user.organization
-                }
-                await redis_adapter.set(session_key, json.dumps(session_data), 1800)  # 30分钟缓存
+                try:
+                    # 缓存会话
+                    session_data = {
+                        'user_id': user.external_user_id,
+                        'username': user.username,
+                        'display_name': user.display_name,
+                        'organization': user.organization
+                    }
+                    await redis_adapter.set(session_key, json.dumps(session_data), 1800)  # 30分钟缓存
+                except Exception as e:
+                    logger.warning(f"Redis set operation failed, session not cached: {e}")
             
             return user
             
