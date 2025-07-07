@@ -181,10 +181,33 @@ pnpm dev
    knowledge_repo = db_manager.get_knowledge_repository()
    ```
 
-### 使用文件管理系统
-1. 文件管理器已弃用，改用新的数据库架构
-2. 使用 `src/database/repositories/file_repository.py` 管理文件元数据
-3. 使用 `src/database/adapters/minio.py` 管理文件存储
+### 统一文件管理系统
+
+系统已统一文件管理架构，解决了之前的冲突问题：
+
+#### 知识库文件管理（主要接口）
+- **上传**: `POST /api/knowledge/databases/{kb_id}/upload`
+  - 支持MinIO和本地存储（通过 `use_minio` 参数控制）
+  - 自动集成到知识库系统
+  - 支持异步文档处理
+- **下载**: `GET /api/knowledge/files/{file_id}/download`
+  - 自动识别存储类型（MinIO/本地）
+  - 统一下载接口
+- **列表**: `GET /api/knowledge/databases/{kb_id}/files`
+- **详情**: `GET /api/knowledge/files/{file_id}`
+
+#### 数据库字段更新
+```sql
+-- knowledge_files表新增字段
+storage_type VARCHAR(20) DEFAULT 'local'  -- 存储类型：local, minio
+file_size INTEGER                          -- 文件大小
+file_metadata JSONB                        -- 文件元数据
+```
+
+#### 迁移支持
+- **迁移接口**: `POST /api/knowledge/migrate-from-data-router`
+- 可将现有data router文件迁移到知识库系统
+- 支持MinIO文件的无缝迁移
 
 
 
@@ -210,9 +233,21 @@ python test/test_neo4j.py
 - 数据库日志: 各数据库服务日志
 
 ### 常见问题
+
+#### SQLAlchemy相关问题
+- **DetachedInstanceError**: 已修复，通过预加载关系属性和分离对象解决
+- **表重复定义**: 使用 `extend_existing=True` 解决模型重新加载问题
+- **metadata字段冲突**: 已重命名为 `file_metadata` 避免SQLAlchemy保留字冲突
+
+#### Redis和异步问题
+- **异步循环冲突**: 已添加异常处理，避免不同事件循环间的冲突
+- **JWT会话缓存失败**: 增强错误处理，缓存失败不影响认证流程
+
+#### 架构和存储问题
 - **端口冲突**: 确保端口5173, 5050, 7474, 9000, 19530, 5432可用
 - **内存问题**: 向量操作需要足够的RAM
 - **GPU支持**: GPU功能需要NVIDIA Container Toolkit
+- **文件存储冲突**: 已统一为知识库管理系统，支持MinIO和本地存储
 
 ### 性能监控
 - Neo4j浏览器：图查询性能
@@ -533,6 +568,17 @@ curl -H "Authorization: Bearer <token>" \
 curl -H "Authorization: Bearer <token>" \
      http://localhost:5050/api/permission-framework/status
 
+# 测试知识库接口
+curl -H "Authorization: Bearer <token>" \
+     http://localhost:5050/api/knowledge/databases
+
+# 测试MinIO文件上传
+curl -X POST \
+     -H "Authorization: Bearer <token>" \
+     -F "file=@test.pdf" \
+     -F "use_minio=true" \
+     http://localhost:5050/api/knowledge/databases/<kb_id>/upload
+
 # 测试外部JWT认证
 curl -H "Authorization: Bearer <jwt_token>" \
      http://localhost:5050/api/data/
@@ -542,6 +588,9 @@ tail -f server.log
 
 # 杀死端口占用进程
 lsof -ti:5050 | xargs kill -9
+
+# 检查数据库字段
+PGPASSWORD=fa6Z363@3bc6af5134 psql -h localhost -p 5432 -U postgres -d xm -c "\d knowledge_files"
 ```
 
 ## 重要开发原则
