@@ -27,7 +27,6 @@ class KnowledgeDatabase(Base):
 
     # 关系
     files = relationship("KnowledgeFile", back_populates="database", cascade="all, delete-orphan")
-    owner = relationship("User", foreign_keys=[owner_id])
     permissions = relationship("KnowledgeDatabasePermission", back_populates="database", cascade="all, delete-orphan")
 
     def to_dict(self, with_nodes=True):
@@ -68,7 +67,6 @@ class KnowledgeFile(Base):
     # 关系
     database = relationship("KnowledgeDatabase", back_populates="files")
     nodes = relationship("KnowledgeNode", back_populates="file", cascade="all, delete-orphan")
-    uploader = relationship("User", foreign_keys=[uploaded_by])
 
     @property
     def computed_node_count(self):
@@ -132,8 +130,6 @@ class KnowledgeDatabasePermission(Base):
     
     # 关系
     database = relationship("KnowledgeDatabase", back_populates="permissions")
-    user = relationship("User", foreign_keys=[user_id])
-    granter = relationship("User", foreign_keys=[granted_by])
 
     def to_dict(self):
         return {
