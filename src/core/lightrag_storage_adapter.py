@@ -165,10 +165,11 @@ class LightRAGStorageAdapter:
         logger.info(f"获取LightRAG完整存储配置 [kb_id={kb_id}]")
         
         # 并行获取所有存储配置
-        neo4j_config, redis_config, pg_config = await asyncio.gather(
+        neo4j_config, redis_config, pg_config, milvus_config = await asyncio.gather(
             self.get_neo4j_storage_config(kb_id),
             self.get_redis_storage_config(kb_id),
             self.get_postgresql_storage_config(kb_id),
+            self.get_milvus_config(kb_id),
             return_exceptions=True
         )
         
@@ -176,45 +177,113 @@ class LightRAGStorageAdapter:
         for config_name, config in [
             ('neo4j', neo4j_config),
             ('redis', redis_config), 
-            ('postgresql', pg_config)
+            ('postgresql', pg_config),
+            ('milvus', milvus_config)
         ]:
             if isinstance(config, Exception):
                 logger.error(f"Failed to get {config_name} config [kb_id={kb_id}]: {config}")
+        
+        # 检查关键存储配置是否成功获取
+        if isinstance(milvus_config, Exception):
+            raise ValueError(f"Milvus配置获取失败: {milvus_config}")
         
         return {
             'graph_storage': neo4j_config['storage_type'] if isinstance(neo4j_config, dict) else 'JsonKVStorage',
             'kv_storage': redis_config['storage_type'] if isinstance(redis_config, dict) else 'JsonKVStorage', 
             'doc_status_storage': pg_config['storage_type'] if isinstance(pg_config, dict) else 'JsonKVStorage',
-            'vector_storage': 'MilvusVectorDBStorage',  # 使用现有Milvus配置
+            'vector_storage': milvus_config['storage_type'] if isinstance(milvus_config, dict) else 'SimpleVectorStorage',
             'configs': {
                 'neo4j': neo4j_config if isinstance(neo4j_config, dict) else None,
                 'redis': redis_config if isinstance(redis_config, dict) else None,
-                'postgresql': pg_config if isinstance(pg_config, dict) else None
+                'postgresql': pg_config if isinstance(pg_config, dict) else None,
+                'milvus': milvus_config if isinstance(milvus_config, dict) else None
             }
         }
     
     async def setup_lightrag_environment(self, kb_id: str = None):
         """
-        设置LightRAG运行环境
+        设置LightRAG运行环境（仅设置环境变量）
         
         Args:
             kb_id: 知识库ID
         """
-        config = await self.get_complete_storage_config(kb_id)
+        # 获取各存储配置并设置环境变量
+        neo4j_config, redis_config, pg_config, milvus_config = await asyncio.gather(
+            self.get_neo4j_storage_config(kb_id),
+            self.get_redis_storage_config(kb_id), 
+            self.get_postgresql_storage_config(kb_id),
+            self.get_milvus_config(kb_id),
+            return_exceptions=True
+        )
+        
+        # 检查关键存储配置是否成功获取
+        if isinstance(milvus_config, Exception):
+            raise ValueError(f"Milvus配置获取失败: {milvus_config}")
         
         # 确保所有必要的环境变量都已设置
         env_vars = [
             'NEO4J_URI', 'NEO4J_USERNAME', 'NEO4J_PASSWORD',
             'REDIS_URI',
             'POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_DATABASE',
-            'POSTGRES_HOST', 'POSTGRES_PORT'
+            'POSTGRES_HOST', 'POSTGRES_PORT',
+            'MILVUS_URI', 'MILVUS_USER', 'MILVUS_PASSWORD'
         ]
         
         missing_vars = [var for var in env_vars if not os.getenv(var)]
         if missing_vars:
             logger.warning(f"Missing environment variables for LightRAG [kb_id={kb_id}]: {missing_vars}")
         
-        logger.info(f"LightRAG环境配置完成 [kb_id={kb_id}]: graph={config['graph_storage']}, kv={config['kv_storage']}, doc_status={config['doc_status_storage']}")
+        logger.info(f"LightRAG环境变量设置完成 [kb_id={kb_id}]")
+    
+    async def get_storage_type_config(self, kb_id: str = None) -> Dict[str, Any]:
+        """
+        获取存储类型配置（不设置环境变量）
+        
+        Args:
+            kb_id: 知识库ID
+            
+        Returns:
+            Dict: 存储类型配置
+        """
+        logger.info(f"获取LightRAG存储类型配置 [kb_id={kb_id}]")
+        
+        # 并行获取所有存储配置
+        neo4j_config, redis_config, pg_config, milvus_config = await asyncio.gather(
+            self.get_neo4j_storage_config(kb_id),
+            self.get_redis_storage_config(kb_id),
+            self.get_postgresql_storage_config(kb_id),
+            self.get_milvus_config(kb_id),
+            return_exceptions=True
+        )
+        
+        # 处理异常
+        for config_name, config in [
+            ('neo4j', neo4j_config),
+            ('redis', redis_config), 
+            ('postgresql', pg_config),
+            ('milvus', milvus_config)
+        ]:
+            if isinstance(config, Exception):
+                logger.error(f"Failed to get {config_name} config [kb_id={kb_id}]: {config}")
+        
+        # 检查关键存储配置是否成功获取
+        if isinstance(milvus_config, Exception):
+            raise ValueError(f"Milvus配置获取失败: {milvus_config}")
+        
+        config = {
+            'graph_storage': neo4j_config['storage_type'] if isinstance(neo4j_config, dict) else 'JsonKVStorage',
+            'kv_storage': redis_config['storage_type'] if isinstance(redis_config, dict) else 'JsonKVStorage', 
+            'doc_status_storage': pg_config['storage_type'] if isinstance(pg_config, dict) else 'JsonKVStorage',
+            'vector_storage': milvus_config['storage_type'] if isinstance(milvus_config, dict) else 'SimpleVectorStorage',
+            'configs': {
+                'neo4j': neo4j_config if isinstance(neo4j_config, dict) else None,
+                'redis': redis_config if isinstance(redis_config, dict) else None,
+                'postgresql': pg_config if isinstance(pg_config, dict) else None,
+                'milvus': milvus_config if isinstance(milvus_config, dict) else None
+            }
+        }
+        
+        logger.info(f"存储类型配置获取完成 [kb_id={kb_id}]: graph={config['graph_storage']}, kv={config['kv_storage']}, doc_status={config['doc_status_storage']}, vector={config['vector_storage']}")
         return config
     
     def _get_fallback_graph_storage(self) -> Dict[str, Any]:
@@ -258,6 +327,13 @@ class LightRAGStorageAdapter:
             if not milvus_adapter:
                 raise ValueError("Milvus adapter not available")
             
+            # 设置LightRAG需要的环境变量
+            os.environ['MILVUS_URI'] = milvus_adapter.uri
+            os.environ['MILVUS_USER'] = milvus_adapter.user
+            os.environ['MILVUS_PASSWORD'] = milvus_adapter.password
+            if milvus_adapter.db_name_milvus:
+                os.environ['MILVUS_DB_NAME'] = milvus_adapter.db_name_milvus
+            
             logger.info(f"Milvus存储配置就绪 [kb_id={kb_id}]: {milvus_adapter.uri}")
             
             return {
@@ -265,16 +341,13 @@ class LightRAGStorageAdapter:
                 'uri': milvus_adapter.uri,
                 'user': milvus_adapter.user,
                 'password': milvus_adapter.password,
-                'db_name': milvus_adapter.db_name,
+                'db_name': milvus_adapter.db_name_milvus,
                 'adapter': milvus_adapter
             }
             
         except Exception as e:
             logger.error(f"Failed to get Milvus config [kb_id={kb_id}]: {e}")
-            return {
-                'storage_type': 'SimpleVectorStorage',
-                'adapter': None
-            }
+            raise ValueError(f"无法获取Milvus配置: {e}")
     
     async def create_database_specific_config(self, kb_id: str, custom_configs: Dict[str, Any] = None) -> Dict[str, Any]:
         """

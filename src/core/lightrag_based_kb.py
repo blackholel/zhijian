@@ -89,10 +89,13 @@ class LightRagBasedKB:
         os.makedirs(working_dir, exist_ok=True)
 
         try:
-            # 获取高性能存储配置
+            # 步骤1: 同步设置环境变量（必须在LightRAG创建之前）
+            self._setup_environment_variables_sync(db_id)
+            
+            # 步骤2: 获取存储类型配置
             storage_config = await self._get_storage_config(db_id)
             
-            # 使用配置的 LLM 和 embedding 函数，传递db_id用于日志和配置
+            # 步骤3: 创建LightRAG实例（此时环境变量已正确设置）
             rag = LightRAG(
                 working_dir=working_dir,
                 llm_model_func=self._get_llm_func(llm_info, db_id=db_id),
@@ -115,29 +118,95 @@ class LightRagBasedKB:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None
 
+    async def _setup_environment_variables(self, db_id: str):
+        """设置LightRAG环境变量（异步版本）"""
+        try:
+            from src.core.lightrag_storage_adapter import get_lightrag_storage_adapter
+            
+            # 获取存储适配器并设置环境变量
+            storage_adapter = get_lightrag_storage_adapter()
+            await storage_adapter.setup_lightrag_environment(db_id)
+            
+            logger.info(f"环境变量设置完成 [db_id={db_id}]")
+            
+        except Exception as e:
+            logger.error(f"设置环境变量失败 [db_id={db_id}]: {e}")
+            raise ValueError(f"无法设置环境变量: {e}")
+    
+    def _setup_environment_variables_sync(self, db_id: str):
+        """设置LightRAG环境变量（同步版本，在LightRAG初始化前调用）"""
+        try:
+            # 直接使用同步方式获取配置并设置环境变量
+            from src.database.manager import get_database_manager
+            
+            db_manager = get_database_manager()
+            
+            # 获取Milvus配置
+            milvus_config = db_manager.get_database_config('milvus')
+            
+            # 直接设置环境变量（注意：不设置MILVUS_TOKEN以避免认证冲突）
+            os.environ['MILVUS_URI'] = milvus_config['uri']
+            os.environ['MILVUS_USER'] = milvus_config['user']
+            os.environ['MILVUS_PASSWORD'] = milvus_config['password']
+            os.environ['MILVUS_DB_NAME'] = milvus_config['db_name']
+            
+            # 设置空的MILVUS_TOKEN以避免认证冲突（LightRAG会传递token=None导致认证失败）
+            # 通过设置空字符串，configparser.get会返回空字符串而不是None
+            os.environ['MILVUS_TOKEN'] = ''
+            
+            # 获取Neo4j配置
+            neo4j_config = db_manager.get_database_config('neo4j')
+            os.environ['NEO4J_URI'] = neo4j_config['uri']
+            os.environ['NEO4J_USERNAME'] = neo4j_config['username']
+            os.environ['NEO4J_PASSWORD'] = neo4j_config['password']
+            
+            # 获取Redis配置
+            redis_config = db_manager.get_database_config('redis')
+            from urllib.parse import quote
+            if redis_config['password']:
+                encoded_password = quote(redis_config['password'], safe='')
+                redis_uri = f"redis://:{encoded_password}@{redis_config['host']}:{redis_config['port']}/{redis_config['db']}"
+            else:
+                redis_uri = f"redis://{redis_config['host']}:{redis_config['port']}/{redis_config['db']}"
+            os.environ['REDIS_URI'] = redis_uri
+            
+            # 获取PostgreSQL配置
+            pg_config = db_manager.get_database_config('lightrag_db')
+            os.environ['POSTGRES_USER'] = pg_config['username']
+            os.environ['POSTGRES_PASSWORD'] = pg_config['password']
+            os.environ['POSTGRES_DATABASE'] = pg_config['database']
+            os.environ['POSTGRES_HOST'] = pg_config['host']
+            os.environ['POSTGRES_PORT'] = str(pg_config['port'])
+            
+            logger.info(f"同步环境变量设置完成 [db_id={db_id}]")
+            
+        except Exception as e:
+            logger.error(f"同步设置环境变量失败 [db_id={db_id}]: {e}")
+            raise ValueError(f"无法设置环境变量: {e}")
+    
     async def _get_storage_config(self, db_id: str) -> dict:
-        """获取存储配置"""
+        """获取存储类型配置"""
         try:
             from src.core.lightrag_storage_adapter import get_lightrag_storage_adapter
             
             # 获取存储适配器
             storage_adapter = get_lightrag_storage_adapter()
             
-            # 设置LightRAG环境并获取配置
-            config = await storage_adapter.setup_lightrag_environment(db_id)
+            # 获取存储类型配置（不设置环境变量）
+            config = await storage_adapter.get_storage_type_config(db_id)
             
-            logger.info(f"高性能存储配置已应用 [db_id={db_id}]: graph={config['graph_storage']}, kv={config['kv_storage']}")
+            logger.info(f"存储类型配置获取完成 [db_id={db_id}]: graph={config['graph_storage']}, kv={config['kv_storage']}, vector={config['vector_storage']}")
             return config
             
         except Exception as e:
-            logger.error(f"获取存储配置失败 [db_id={db_id}]: {e}, 使用降级配置")
-            return self._get_fallback_storage_config()
+            logger.error(f"获取存储配置失败 [db_id={db_id}]: {e}")
+            raise ValueError(f"无法获取存储配置: {e}")
     
     def _get_fallback_storage_config(self) -> dict:
         """获取降级存储配置"""
         logger.warning("使用降级存储配置")
         return {
-            'vector_storage': 'MilvusVectorDBStorage',
+            'vector_storage': 'SimpleVectorStorage',  # 降级为SimpleVectorStorage
             'kv_storage': 'JsonKVStorage',
             'graph_storage': 'JsonKVStorage',  # 降级为JsonKVStorage
             'doc_status_storage': 'JsonKVStorage'
