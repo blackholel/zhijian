@@ -43,7 +43,9 @@ class MinIOAdapter(FileStorageAdapter):
         self.default_bucket = config.get('bucket_name', 'yuxi-know')
         
         # 连接配置
-        self.endpoint = self._parse_endpoint(config.get('endpoint', 'localhost:9000'))
+        # 支持uri和endpoint两种配置方式
+        endpoint_config = config.get('endpoint') or config.get('uri', 'localhost:9000')
+        self.endpoint = self._parse_endpoint(endpoint_config)
         self.access_key = config.get('access_key', 'minioadmin')
         self.secret_key = config.get('secret_key', 'minioadmin')
         self.secure = config.get('secure', False)
@@ -197,10 +199,11 @@ class MinIOAdapter(FileStorageAdapter):
         }
     
     def _sanitize_key(self, key: str) -> str:
-        """清理对象键，移除不安全字符"""
+        """清理对象键，保留中文字符"""
         import re
-        # 移除或替换不安全字符
-        safe_key = re.sub(r'[^\w\-_\./]', '_', key)
+        # 只移除真正不安全的字符，保留中文字符
+        # 移除控制字符和一些特殊字符，但保留中文和常用标点
+        safe_key = re.sub(r'[\x00-\x1f\x7f<>:"|?*]', '_', key)
         # 移除开头的斜杠
         safe_key = safe_key.lstrip('/')
         return safe_key[:1000]  # 限制长度
@@ -300,6 +303,8 @@ class MinIOAdapter(FileStorageAdapter):
         bucket = bucket_name or self.default_bucket
         clean_key = self._sanitize_key(storage_key)
         
+        logger.info(f"上传字节数据到MinIO: 原始键={storage_key}, 清理后键={clean_key}")
+        
         try:
             if content_type is None:
                 content_type = "application/octet-stream"
@@ -324,7 +329,7 @@ class MinIOAdapter(FileStorageAdapter):
             await asyncio.get_event_loop().run_in_executor(None, _sync_upload)
             
             logger.info(f"Data uploaded successfully: {bucket}/{clean_key} ({data_size} bytes)")
-            return clean_key
+            return clean_key  # 返回实际使用的键（清理后的）
             
         except Exception as e:
             logger.error(f"Data upload failed {storage_key}: {e}")
@@ -346,6 +351,8 @@ class MinIOAdapter(FileStorageAdapter):
         await self.ensure_connected()
         
         bucket = bucket_name or self.default_bucket
+        
+        logger.info(f"从MinIO下载文件: bucket={bucket}, 存储键={storage_key}")
         
         try:
             def _sync_download():

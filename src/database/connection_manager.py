@@ -400,7 +400,7 @@ class DatabaseConnectionManager:
         initialization_tasks = []
         for db_name, db_type in common_dbs:
             if self.config_manager.validate_database_config(db_name):
-                task = self.initialize_database(db_name, db_type, auto_connect=False)
+                task = self.initialize_database(db_name, db_type, auto_connect=True)
                 initialization_tasks.append((db_name, task))
             else:
                 logger.warning(f"Skipping '{db_name}' due to invalid configuration")
@@ -421,3 +421,24 @@ class DatabaseConnectionManager:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """异步上下文管理器出口"""
         await self.close_all()
+    
+    # 便利方法获取特定类型的适配器
+    async def get_postgresql_adapter(self, db_name: str = 'server_db'):
+        """获取PostgreSQL适配器"""
+        return await self.get_adapter(db_name)
+    
+    async def get_neo4j_adapter(self, db_name: str = 'neo4j'):
+        """获取Neo4j适配器"""
+        return await self.get_adapter(db_name)
+    
+    async def get_redis_adapter(self, db_name: str = 'redis'):
+        """获取Redis适配器"""
+        return await self.get_adapter(db_name)
+    
+    async def get_milvus_adapter(self, db_name: str = 'milvus'):
+        """获取Milvus适配器"""
+        return await self.get_adapter(db_name)
+    
+    async def get_minio_adapter(self, db_name: str = 'minio'):
+        """获取MinIO适配器"""
+        return await self.get_adapter(db_name)

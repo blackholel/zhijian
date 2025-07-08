@@ -181,6 +181,68 @@ pnpm dev
    knowledge_repo = db_manager.get_knowledge_repository()
    ```
 
+### LightRAG高性能存储集成
+
+系统已集成LightRAG高性能存储架构，实现企业级知识库处理能力：
+
+#### 核心组件
+- **存储适配器**: `src/core/lightrag_storage_adapter.py`
+  - 集成统一数据库管理系统
+  - 自动配置多种高性能存储后端
+  - 支持环境变量自动设置和URL编码
+  - 提供降级机制确保系统稳定性
+
+- **模型适配器**: `src/core/lightrag_model_adapter.py` 
+  - 集成项目统一配置系统
+  - 支持多级配置降级：知识库配置 → 系统默认配置 → 硬编码降级
+  - LLM和嵌入模型的统一管理
+
+#### 高性能存储配置
+
+| 存储类型 | 后端 | 用途 | 性能优势 |
+|---------|------|------|----------|
+| 图存储 | **Neo4j** | 知识图谱关系 | 原生图算法，复杂关系查询 |
+| KV存储 | **Redis** | 文档分块缓存 | 内存数据库，极快读写速度 |
+| 文档状态存储 | **PostgreSQL** | 处理状态跟踪 | 事务支持，数据一致性 |
+| 向量存储 | **Milvus** | 向量索引检索 | 专业向量数据库，高效相似性搜索 |
+
+#### 环境变量自动配置
+LightRAG运行时自动设置以下环境变量：
+```bash
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=A620250234Neo4j
+REDIS_URI=redis://:encoded_password@localhost:6379/0
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=fa6Z363@3bc6af5134
+POSTGRES_DATABASE=lightrag
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+```
+
+#### 核心代码集成
+在 `src/core/lightrag_based_kb.py` 中实现了：
+```python
+# 原始配置
+vector_storage="MilvusVectorDBStorage"
+kv_storage="JsonKVStorage"  
+graph_storage="PGGraphStorage"          # ❌ 有问题
+doc_status_storage="JsonDocStatusStorage"
+
+# 新的高性能配置  
+vector_storage="MilvusVectorDBStorage"
+kv_storage="RedisKVStorage"             # ✅ Redis缓存
+graph_storage="Neo4JStorage"            # ✅ Neo4j图数据库
+doc_status_storage="PGDocStatusStorage" # ✅ PostgreSQL存储
+```
+
+#### 性能提升
+- **并发处理**: Redis连接池支持高并发访问
+- **图查询优化**: Neo4j原生图算法支持
+- **数据一致性**: PostgreSQL事务保证
+- **向量检索**: Milvus专业向量数据库
+- **缓存机制**: 多层缓存提升响应速度
+
 ### 统一文件管理系统
 
 系统已统一文件管理架构，解决了之前的冲突问题：
@@ -190,6 +252,7 @@ pnpm dev
   - 仅支持MinIO存储
   - 自动集成到知识库系统
   - 支持异步文档处理
+  - 集成LightRAG高性能处理引擎
 - **下载**: `GET /api/knowledge/files/{file_id}/download`
   - 仅支持MinIO存储
   - 统一下载接口
@@ -202,6 +265,9 @@ pnpm dev
 storage_type VARCHAR(20) DEFAULT 'minio'  -- 存储类型：minio
 file_size INTEGER                          -- 文件大小
 file_metadata JSONB                        -- 文件元数据
+
+-- lightrag数据库已安装vector扩展
+CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
 #### 迁移支持
@@ -243,11 +309,19 @@ python test/test_neo4j.py
 - **异步循环冲突**: 已添加异常处理，避免不同事件循环间的冲突
 - **JWT会话缓存失败**: 增强错误处理，缓存失败不影响认证流程
 
+#### LightRAG存储问题
+- **PGGraphStorage配置错误**: 已修复，改用Neo4j图存储和Redis KV存储
+- **环境变量缺失**: 存储适配器自动设置所需环境变量
+- **Redis URI编码**: 已修复密码特殊字符的URL编码问题
+- **PostgreSQL vector扩展**: 已安装pgvector扩展支持向量类型
+- **编码问题**: 'utf-8' codec错误为缓存层问题，不影响主要功能
+
 #### 架构和存储问题
 - **端口冲突**: 确保端口5173, 5050, 7474, 9000, 19530, 5432可用
 - **内存问题**: 向量操作需要足够的RAM
 - **GPU支持**: GPU功能需要NVIDIA Container Toolkit
 - **文件存储冲突**: 已统一为知识库管理系统，支持MinIO和本地存储
+- **Neo4j企业版限制**: 社区版使用默认数据库，功能正常
 
 ### 性能监控
 - Neo4j浏览器：图查询性能

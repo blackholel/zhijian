@@ -215,14 +215,12 @@ async def upload_document(
                 raise HTTPException(status_code=400, detail="元数据格式错误")
         
         # 使用MinIO存储
-        from src.database.manager import get_database_manager
         import hashlib
         import os
         from datetime import datetime
         
-        db_manager = get_database_manager()
-        await db_manager.initialize()
-        minio_adapter = await db_manager.get_minio_adapter()
+        # 使用知识库管理器中的MinIO适配器
+        minio_adapter = await kb_manager.connection_manager.get_minio_adapter()
         
         # 生成唯一文件名和MinIO存储路径
         basename, ext = os.path.splitext(file.filename)
@@ -230,11 +228,11 @@ async def upload_document(
         storage_key = f"knowledge_bases/{kb_id}/documents/{file_id}/{file.filename}"
         
         # 上传到MinIO
-        await minio_adapter.upload_bytes(file_content, storage_key)
+        actual_storage_key = await minio_adapter.upload_bytes(file_content, storage_key)
         
-        # 使用MinIO路径创建知识库文件记录
+        # 使用MinIO返回的实际存储键创建知识库文件记录
         uploaded_file = await kb_manager.upload_document(
-            kb_id, storage_key, file.filename, file_type, user_id, file_metadata, file_id, len(file_content)
+            kb_id, actual_storage_key, file.filename, file_type, user_id, file_metadata, file_id, len(file_content)
         )
         
         return {
@@ -320,16 +318,14 @@ async def download_file(
             raise HTTPException(status_code=404, detail="文件不存在")
         
         # 从MinIO下载
-        from src.database.manager import get_database_manager
         from fastapi.responses import StreamingResponse
         import io
         
-        db_manager = get_database_manager()
-        await db_manager.initialize()
-        minio_adapter = await db_manager.get_minio_adapter()
+        # 使用知识库管理器中的MinIO适配器
+        minio_adapter = await kb_manager.connection_manager.get_minio_adapter()
         
         # 获取文件内容
-        file_content = await minio_adapter.download_bytes(file_obj.path)
+        file_content = await minio_adapter.get_file_bytes(file_obj.path)
         
         return StreamingResponse(
             io.BytesIO(file_content),
@@ -508,32 +504,102 @@ async def get_statistics(
 @knowledge_router.post("/migrate-from-data-router")
 @require_system_permission(Permission.ADMIN)
 async def migrate_from_data_router(
-    kb_id: str = Body(...),
+    migration_data: Dict[str, Any] = Body(...),
     current_user: User = Depends(get_required_user)
 ) -> Dict[str, Any]:
-    """从data router迁移文件到知识库系统"""
+    """从data router迁移文件到知识库系统 - 利用LightRAG集成优势"""
     try:
-        from src.database.manager import get_database_manager
+        kb_id = migration_data.get('kb_id')
+        if not kb_id:
+            raise HTTPException(status_code=400, detail="缺少知识库ID")
         
-        db_manager = get_database_manager()
-        await db_manager.initialize()
+        kb_manager = await get_kb_manager()
+        user_id = get_user_id(current_user)
         
-        # 获取data router的文件仓储
-        file_repo = db_manager.get_file_repository()
-        
-        # 查找与知识库相关的文件
-        # 这里需要根据metadata中的kb_id匹配
-        # 具体实现取决于FileRepository的查询方法
+        # 🔑 利用LightRAG适配器的优势：数据已经在LightRAG中
+        from src import knowledge_base  # 复用全局LightRagBasedKB实例
         
         migrated_count = 0
-        # TODO: 实现具体的迁移逻辑
+        
+        # 检查LightRAG中是否有该知识库的数据
+        if kb_id in knowledge_base.databases_meta:
+            # 获取LightRAG中的文件元数据
+            lightrag_files = {}
+            for file_id, file_info in knowledge_base.files_meta.items():
+                if file_info.get("database_id") == kb_id:
+                    lightrag_files[file_id] = file_info
+            
+            logger.info(f"发现LightRAG中有 {len(lightrag_files)} 个文件待迁移")
+            
+            # 确保新架构中存在对应的知识库
+            kb = await kb_manager.get_knowledge_base(kb_id, user_id, include_files=False)
+            if not kb:
+                # 如果知识库不存在，从LightRAG元数据创建
+                lightrag_kb_meta = knowledge_base.databases_meta[kb_id]
+                kb_data = {
+                    'db_id': kb_id,
+                    'name': lightrag_kb_meta.get('name', kb_id),
+                    'description': lightrag_kb_meta.get('description', ''),
+                    'metadata': lightrag_kb_meta.get('metadata', {})
+                }
+                await kb_manager.create_knowledge_base(kb_data, user_id)
+                logger.info(f"已在新架构中创建知识库: {kb_id}")
+            
+            # 迁移文件记录到新架构
+            for file_id, file_info in lightrag_files.items():
+                try:
+                    # 检查文件是否已存在于新架构中
+                    existing_file = await kb_manager.get_file_details(file_id, user_id, include_nodes=False)
+                    if existing_file:
+                        logger.info(f"文件 {file_id} 已存在，跳过迁移")
+                        continue
+                    
+                    # 创建文件记录（使用MinIO存储类型）
+                    file_record_data = {
+                        'file_id': file_id,
+                        'filename': file_info.get('filename', f'migrated_{file_id}'),
+                        'path': file_info.get('path', ''),
+                        'file_type': file_info.get('file_type', 'unknown'),
+                        'status': 'completed',  # LightRAG中的文件已处理完成
+                        'storage_type': 'minio',  # 标记为MinIO存储
+                        'file_size': 0,  # 待获取实际大小
+                        'metadata': {
+                            'migrated_from': 'lightrag_data_router',
+                            'original_created_at': file_info.get('created_at'),
+                            'migration_timestamp': datetime.now().isoformat()
+                        }
+                    }
+                    
+                    # 使用文件仓储直接创建记录
+                    migrated_file = await kb_manager.file_repo.create(file_record_data, kb_id, user_id)
+                    migrated_count += 1
+                    
+                    logger.info(f"已迁移文件: {file_id} -> {migrated_file.file_id}")
+                    
+                except Exception as file_error:
+                    logger.error(f"迁移文件 {file_id} 失败: {file_error}")
+                    continue
+            
+            # 同步LightRAG知识库到新架构
+            await kb_manager.lightrag_adapter.ensure_lightrag_sync(kb_id)
+            
+        else:
+            logger.warning(f"LightRAG中未找到知识库 {kb_id} 的数据")
         
         return {
             "message": f"迁移完成，共迁移 {migrated_count} 个文件",
             "migrated_files": migrated_count,
-            "status": "success"
+            "kb_id": kb_id,
+            "status": "success",
+            "details": {
+                "source": "lightrag_data_router",
+                "target": "knowledge_base_manager",
+                "lightrag_integration": "maintained"
+            }
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"迁移失败: {e}, {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"迁移失败: {str(e)}")
@@ -557,3 +623,147 @@ async def health_check() -> Dict[str, Any]:
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+
+# 模型配置管理接口
+
+@knowledge_router.get("/databases/{kb_id}/model-config")
+@require_kb_permission(Permission.READ, "kb_id")
+async def get_kb_model_config(
+    kb_id: str,
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """获取知识库的模型配置"""
+    try:
+        kb_manager = await get_kb_manager()
+        user_id = get_user_id(current_user)
+        
+        config_info = await kb_manager.lightrag_adapter.get_kb_model_config(kb_id, user_id)
+        
+        if not config_info:
+            raise HTTPException(status_code=404, detail="知识库不存在或无权限访问")
+        
+        return {
+            "success": True,
+            "data": config_info
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取模型配置失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"获取模型配置失败: {str(e)}")
+
+
+@knowledge_router.put("/databases/{kb_id}/model-config")
+@require_kb_permission(Permission.UPDATE, "kb_id")
+async def set_kb_model_config(
+    kb_id: str,
+    config_data: Dict[str, Any],
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """设置知识库的模型配置"""
+    try:
+        kb_manager = await get_kb_manager()
+        user_id = get_user_id(current_user)
+        
+        # 提取配置参数
+        llm_provider = config_data.get('llm_provider')
+        llm_model = config_data.get('llm_model')
+        embed_provider = config_data.get('embed_provider')
+        embed_model = config_data.get('embed_model')
+        
+        # 验证必要参数
+        if not llm_provider and not embed_provider:
+            raise HTTPException(status_code=400, detail="至少需要提供一种模型配置")
+        
+        success = await kb_manager.lightrag_adapter.set_kb_model_config(
+            kb_id=kb_id,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            embed_provider=embed_provider,
+            embed_model=embed_model,
+            user_id=user_id
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="模型配置更新失败")
+        
+        return {
+            "success": True,
+            "message": "模型配置已更新",
+            "kb_id": kb_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"设置模型配置失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"设置模型配置失败: {str(e)}")
+
+
+@knowledge_router.get("/model-config/available")
+@require_system_permission(Permission.READ)
+async def get_available_models(
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """获取所有可用的模型配置"""
+    try:
+        from src.core.lightrag_model_adapter import get_lightrag_model_adapter
+        
+        adapter = get_lightrag_model_adapter()
+        available_models = adapter.get_available_models()
+        
+        return {
+            "success": True,
+            "data": available_models
+        }
+        
+    except Exception as e:
+        logger.error(f"获取可用模型失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"获取可用模型失败: {str(e)}")
+
+
+@knowledge_router.delete("/databases/{kb_id}/model-config")
+@require_kb_permission(Permission.UPDATE, "kb_id")
+async def reset_kb_model_config(
+    kb_id: str,
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """重置知识库模型配置为系统默认"""
+    try:
+        kb_manager = await get_kb_manager()
+        user_id = get_user_id(current_user)
+        
+        # 获取知识库
+        kb = await kb_manager.kb_repo.get_by_id(kb_id, user_id)
+        if not kb:
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        
+        # 清除模型配置
+        meta_info = getattr(kb, 'meta_info', {}) or {}
+        if 'model_config' in meta_info:
+            del meta_info['model_config']
+            kb.meta_info = meta_info
+            await kb_manager.kb_repo.update(kb)
+        
+        # 清除LightRAG缓存
+        from src import knowledge_base
+        if kb_id in knowledge_base.databases_meta:
+            del knowledge_base.databases_meta[kb_id]
+        if kb_id in knowledge_base.instances:
+            del knowledge_base.instances[kb_id]
+        
+        logger.info(f"已重置知识库模型配置: {kb_id}")
+        
+        return {
+            "success": True,
+            "message": "已重置为系统默认配置",
+            "kb_id": kb_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重置模型配置失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"重置模型配置失败: {str(e)}")

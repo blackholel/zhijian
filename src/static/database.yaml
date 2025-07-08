@@ -55,7 +55,8 @@ environments:
       access_key: minioadmin
       secret_key: A6pgsql20200624
       secure: false
-      region: 
+      region: us-east-1
+      bucket_name: yuxi-know 
       
     # Redis缓存数据库
     redis:
@@ -118,7 +119,8 @@ environments:
       access_key: minioadmin
       secret_key: A6pgsql20200624
       secure: false
-      region: 
+      region: us-east-1
+      bucket_name: yuxi-know-test 
       
     redis:
       host: localhost
