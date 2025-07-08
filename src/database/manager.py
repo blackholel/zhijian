@@ -10,7 +10,6 @@ from typing import Dict, Any, Optional
 from .config_manager import DatabaseConfigManager
 from .connection_manager import DatabaseConnectionManager
 from .base import DatabaseType
-from .repositories import UserRepository, KnowledgeRepository, GraphRepository, FileRepository
 
 logger = logging.getLogger(__name__)
 
@@ -106,29 +105,33 @@ class UnifiedDatabaseManager:
         """获取MinIO适配器"""
         return await self.connection_manager.get_adapter(db_name)
     
-    # 仓储访问方法
+    # 仓储访问方法（延迟导入避免循环依赖）
     
-    def get_user_repository(self) -> UserRepository:
+    def get_user_repository(self):
         """获取用户仓储"""
         if 'user' not in self._repositories:
+            from .repositories.user_repository import UserRepository
             self._repositories['user'] = UserRepository(self.connection_manager)
         return self._repositories['user']
     
-    def get_knowledge_repository(self) -> KnowledgeRepository:
+    def get_knowledge_repository(self):
         """获取知识库仓储"""
         if 'knowledge' not in self._repositories:
+            from .repositories.knowledge_repository import KnowledgeRepository
             self._repositories['knowledge'] = KnowledgeRepository(self.connection_manager)
         return self._repositories['knowledge']
     
-    def get_graph_repository(self) -> GraphRepository:
+    def get_graph_repository(self):
         """获取图数据仓储"""
         if 'graph' not in self._repositories:
+            from .repositories.graph_repository import GraphRepository
             self._repositories['graph'] = GraphRepository(self.connection_manager)
         return self._repositories['graph']
     
-    def get_file_repository(self) -> FileRepository:
+    def get_file_repository(self):
         """获取文件仓储"""
         if 'file' not in self._repositories:
+            from .repositories.file_repository import FileRepository
             self._repositories['file'] = FileRepository(self.connection_manager)
         return self._repositories['file']
     
@@ -290,25 +293,25 @@ async def get_database_manager_dependency() -> UnifiedDatabaseManager:
     return db_manager
 
 
-async def get_user_repository_dependency() -> UserRepository:
+async def get_user_repository_dependency():
     """FastAPI依赖注入：获取用户仓储"""
     db_manager = await get_database_manager_dependency()
     return db_manager.get_user_repository()
 
 
-async def get_knowledge_repository_dependency() -> KnowledgeRepository:
+async def get_knowledge_repository_dependency():
     """FastAPI依赖注入：获取知识库仓储"""
     db_manager = await get_database_manager_dependency()
     return db_manager.get_knowledge_repository()
 
 
-async def get_graph_repository_dependency() -> GraphRepository:
+async def get_graph_repository_dependency():
     """FastAPI依赖注入：获取图数据仓储"""
     db_manager = await get_database_manager_dependency()
     return db_manager.get_graph_repository()
 
 
-async def get_file_repository_dependency() -> FileRepository:
+async def get_file_repository_dependency():
     """FastAPI依赖注入：获取文件仓储"""
     db_manager = await get_database_manager_dependency()
     return db_manager.get_file_repository()

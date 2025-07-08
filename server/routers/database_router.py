@@ -10,8 +10,7 @@ from typing import Dict, Any
 from src.database.manager import (
     get_database_manager_dependency,
     get_user_repository_dependency,
-    UnifiedDatabaseManager,
-    UserRepository
+    UnifiedDatabaseManager
 )
 from server.auth.rbac_middleware import get_admin_user, get_superadmin_user
 from server.models.user_model import User
@@ -212,7 +211,7 @@ async def get_repository_status(
 
 @router.get("/users/count")
 async def get_user_count(
-    user_repo: UserRepository = Depends(get_user_repository_dependency)
+    user_repo = Depends(get_user_repository_dependency)
 ) -> Dict[str, Any]:
     """获取用户数量"""
     try:
@@ -234,7 +233,7 @@ async def get_user_count(
 @router.get("/users/statistics")
 async def get_user_statistics(
     current_user: User = Depends(get_admin_user),
-    user_repo: UserRepository = Depends(get_user_repository_dependency)
+    user_repo = Depends(get_user_repository_dependency)
 ) -> Dict[str, Any]:
     """获取用户统计信息（需要管理员权限）"""
     try:

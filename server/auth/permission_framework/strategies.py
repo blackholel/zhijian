@@ -11,7 +11,6 @@ import logging
 
 from .core import PermissionContext, PermissionResult, Permission, ResourceType
 from server.models.user_model import User
-from server.db_manager import db_manager
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +70,9 @@ class PermissionStrategy(ABC):
             return None
     
     def _get_db(self) -> Session:
-        """获取数据库会话"""
-        return db_manager.get_session()
+        """获取数据库会话（延迟导入）"""
+        from server.db_manager import get_session
+        return get_session()
 
 class SuperAdminStrategy(PermissionStrategy):
     """超级管理员策略"""
