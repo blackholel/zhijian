@@ -547,6 +547,60 @@ class FileStatusEventDto:
 - 详细的错误日志和性能监控
 - 缓存命中率统计
 - 状态变化事件追踪
+
+#### 文件状态管理架构最终优化 (2025-07-09)
+
+**完成的核心修复**：
+
+1. **数据库模型完善**
+   ```sql
+   -- 添加缺失的时间字段
+   ALTER TABLE knowledge_files 
+   ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+   ADD COLUMN last_processed_at TIMESTAMP NULL;
+   
+   -- 自动更新触发器
+   CREATE TRIGGER update_knowledge_files_updated_at
+       BEFORE UPDATE ON knowledge_files
+       FOR EACH ROW
+       EXECUTE FUNCTION update_updated_at_column();
+   ```
+
+2. **DTO标准化架构**
+   - 位置: `src/services/dto/file_status_dto.py`
+   - 智能时间字段处理，支持多种数据类型
+   - 完善的错误处理和降级机制
+   - 标准化的数据传输格式
+
+3. **缓存策略优化**
+   - 复用现有Redis适配器 (`src/database/adapters/redis.py`)
+   - 多级缓存 (L1内存 + L2 Redis)
+   - 智能序列化/反序列化
+   - 自动降级到内存缓存
+
+4. **API接口测试通过**
+   ```bash
+   # 接口已完全修复，正常返回updated_at字段
+   GET /api/knowledge/databases/{kb_id}/files/status?page=1&page_size=10
+   ```
+
+**问题解决验证**：
+- ✅ 解决 `'KnowledgeFile' object has no attribute 'updated_at'` 错误
+- ✅ 修复 `the JSON object must be str, bytes or bytearray, not dict` 缓存问题
+- ✅ 实现标准化的数据传输对象模式
+- ✅ 完善的错误处理和容错机制
+- ✅ 高性能的多级缓存策略
+
+**架构原则完整实现**：
+- 单一职责：每个模块专注单一功能
+- 清晰边界：数据层、缓存层、服务层分离
+- 可扩展接口：支持多种缓存后端和数据格式
+- 高内聚低耦合：模块内聚合度高，模块间依赖最小
+- 事件驱动：Redis pub/sub支持实时状态更新
+- 容错设计：多层降级机制确保系统稳定性
+
+**最终效果**：
+系统现在具备企业级的文件状态管理能力，支持高并发、实时更新、容错处理，完全解决了原有的架构问题。
 - 健康检查接口
 
 **向后兼容**：
