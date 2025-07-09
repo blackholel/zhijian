@@ -90,8 +90,29 @@ class KnowledgeFile(Base):
 
     @property
     def computed_node_count(self):
-        """动态计算节点数量"""
+        """动态计算节点数量，支持缓存值"""
+        # 优先使用缓存的node_count（用于从缓存重建的对象）
+        if hasattr(self, '_cached_node_count'):
+            return self._cached_node_count
+        # 否则动态计算（用于从数据库查询的对象）
         return len(self.nodes) if self.nodes is not None else 0
+
+    def _safe_get_timestamp(self):
+        """安全获取created_at的timestamp，支持缓存对象"""
+        created_at = getattr(self, 'created_at', None)
+        if created_at is None:
+            return time.time()
+        
+        # 如果是datetime对象，转换为timestamp
+        if hasattr(created_at, 'timestamp'):
+            return created_at.timestamp()
+        
+        # 如果已经是数字（从缓存恢复的），直接返回
+        if isinstance(created_at, (int, float)):
+            return created_at
+        
+        # 默认返回当前时间
+        return time.time()
 
     def to_dict(self, with_nodes=True):
         """转换为字典格式"""
@@ -106,7 +127,7 @@ class KnowledgeFile(Base):
                 "file_size": getattr(self, 'file_size', None),
                 "metadata": getattr(self, 'file_metadata', None) or {},
                 "node_count": self.computed_node_count,
-                "created_at": getattr(self, 'created_at', None).timestamp() if getattr(self, 'created_at', None) else time.time(),
+                "created_at": self._safe_get_timestamp(),
                 "uploaded_by": str(getattr(self, 'uploaded_by', None)) if getattr(self, 'uploaded_by', None) else None,
                 "database_id": getattr(self, 'database_id', None)
             }

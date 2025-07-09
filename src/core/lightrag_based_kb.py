@@ -96,8 +96,10 @@ class LightRagBasedKB:
             storage_config = await self._get_storage_config(db_id)
             
             # 步骤3: 创建LightRAG实例（此时环境变量已正确设置）
+            # 🔑 关键修改：设置namespace_prefix为知识库ID，实现按知识库维度的集合隔离
             rag = LightRAG(
                 working_dir=working_dir,
+                namespace_prefix=f"kb_{db_id}_",  # 设置知识库级别的命名空间前缀
                 llm_model_func=self._get_llm_func(llm_info, db_id=db_id),
                 embedding_func=self._get_embedding_func(embed_info, db_id=db_id),
                 vector_storage=storage_config['vector_storage'],

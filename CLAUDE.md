@@ -413,6 +413,100 @@ server/db_manager.py → src/database/manager.py ❌
 - ✅ 数据库访问功能完整
 - ✅ 兼容性接口保留
 
+#### SQLAlchemy对象生命周期管理优化 (2025-07-09)
+
+**问题背景**：
+系统出现SQLAlchemy DetachedInstanceError问题：
+```
+Instance <KnowledgeFile> is not bound to a Session; 
+attribute refresh operation cannot proceed
+```
+
+**根本原因**：
+1. **会话分离问题**: 对象在数据库会话关闭后仍被访问
+2. **缓存序列化失败**: Redis缓存无法正确处理SQLAlchemy对象
+3. **lazy-loading失败**: `to_dict()`方法访问已分离对象的属性时失败
+4. **复杂依赖关系**: `computed_node_count`依赖`nodes`关系，在缓存对象中无法正确计算
+
+**解决方案**：
+
+1. **预加载和对象分离策略**
+   ```python
+   def _preload_and_detach_file(self, session: Session, file_obj: KnowledgeFile):
+       """预加载所有必要属性并分离对象，避免Session关闭后的LazyLoading问题"""
+       # 预加载所有基本属性
+       _ = file_obj.file_id, file_obj.filename, file_obj.path...
+       _ = file_obj.nodes  # 通过selectinload预加载关系
+       
+       # 从Session中分离对象
+       session.expunge(file_obj)
+       return file_obj
+   ```
+
+2. **优化缓存策略 - 字典序列化**
+   ```python
+   async def _set_file_cache(self, key: str, files: List[KnowledgeFile]):
+       """设置文件缓存，只缓存基本信息避免复杂对象序列化"""
+       cached_data = []
+       for file_obj in files:
+           file_dict = {
+               "file_id": getattr(file_obj, 'file_id', None),
+               "filename": getattr(file_obj, 'filename', None),
+               # ... 其他基本属性
+               "node_count": len(getattr(file_obj, 'nodes', []))  # 预计算
+           }
+           cached_data.append(file_dict)
+   ```
+
+3. **增强验证的对象重建**
+   ```python
+   async def _get_file_cache(self, key: str) -> Optional[List[KnowledgeFile]]:
+       """从缓存获取文件列表，增强验证逻辑确保对象安全重建"""
+       # 类型检查，确保缓存数据格式正确
+       if not isinstance(cached_data, list): return None
+       
+       # 安全属性设置，异常处理
+       # 预计算属性缓存，避免运行时依赖
+   ```
+
+4. **支持缓存的模型属性**
+   ```python
+   @property
+   def computed_node_count(self):
+       """动态计算节点数量，支持缓存值"""
+       # 优先使用缓存的node_count（用于从缓存重建的对象）
+       if hasattr(self, '_cached_node_count'):
+           return self._cached_node_count
+       # 否则动态计算（用于从数据库查询的对象）
+       return len(self.nodes) if self.nodes is not None else 0
+   ```
+
+**修复的方法**：
+- ✅ `get_files_by_database` - 获取知识库文件列表
+- ✅ `get_files_by_user` - 获取用户文件列表  
+- ✅ `find_all` - 获取所有文件列表
+- ✅ `get_by_id` - 获取单个文件详情
+- ✅ `create` - 创建文件记录
+
+**技术要点**：
+- **预加载模式**: 使用`selectinload`和手动属性访问确保数据完整性
+- **对象分离**: `session.expunge()`断开对象与会话的关联
+- **缓存优化**: 字典序列化代替对象序列化，提高可靠性和性能
+- **增强验证**: 类型检查、异常处理、安全默认值
+- **预计算属性**: 避免运行时复杂依赖关系
+
+**性能改进**：
+- ✅ 解决DetachedInstanceError，确保系统稳定性
+- ✅ 保持30分钟缓存TTL，提升查询性能  
+- ✅ 字典序列化比对象序列化更快更可靠
+- ✅ 预计算减少运行时计算开销
+
+**向后兼容**：
+- ✅ 保持所有现有API接口不变
+- ✅ `to_dict()`方法正常工作
+- ✅ 缓存和非缓存路径都能正确处理
+- ✅ 原有的SQLAlchemy模型功能完整
+
 ### 性能监控
 - Neo4j浏览器：图查询性能
 - Milvus指标：向量搜索性能

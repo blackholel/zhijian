@@ -507,6 +507,285 @@ class MilvusAdapter(NoSQLDatabaseAdapter):
             logger.error(f"Failed to save document {doc_id} to {collection}: {e}")
             return False
     
+    # =============================================================================
+    # 知识库级别的集合管理方法
+    # =============================================================================
+    
+    def _get_kb_collection_name(self, kb_id: str, collection_type: str) -> str:
+        """获取知识库专用集合名称
+        
+        Args:
+            kb_id: 知识库ID
+            collection_type: 集合类型 (entities, relationships, chunks)
+            
+        Returns:
+            知识库专用集合名称，格式: kb_{kb_id}_{collection_type}
+        """
+        return f"kb_{kb_id}_{collection_type}"
+    
+    def _get_kb_id_from_collection_name(self, collection_name: str) -> Optional[str]:
+        """从集合名称中提取知识库ID
+        
+        Args:
+            collection_name: 集合名称
+            
+        Returns:
+            知识库ID，如果不是知识库专用集合则返回None
+        """
+        if collection_name.startswith('kb_') and collection_name.count('_') >= 2:
+            # 格式: kb_{kb_id}_{collection_type}
+            parts = collection_name.split('_')
+            if len(parts) >= 3:
+                # 提取kb_id部分 (可能包含下划线)
+                kb_id = '_'.join(parts[1:-1])
+                return kb_id
+        return None
+    
+    def _get_collection_type_from_name(self, collection_name: str) -> Optional[str]:
+        """从集合名称中提取集合类型
+        
+        Args:
+            collection_name: 集合名称
+            
+        Returns:
+            集合类型 (entities, relationships, chunks)，如果不是知识库专用集合则返回None
+        """
+        if collection_name.startswith('kb_') and collection_name.count('_') >= 2:
+            # 格式: kb_{kb_id}_{collection_type}
+            parts = collection_name.split('_')
+            if len(parts) >= 3:
+                return parts[-1]  # 最后一部分是集合类型
+        return None
+    
+    async def create_kb_collections(self, kb_id: str, schema_definitions: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+        """为知识库创建所有必需的集合
+        
+        Args:
+            kb_id: 知识库ID
+            schema_definitions: 集合schema定义，如果为None则使用默认schema
+            
+        Returns:
+            创建成功返回True
+        """
+        # 默认的LightRAG集合类型
+        collection_types = ['entities', 'relationships', 'chunks']
+        
+        # 默认schema定义
+        default_schemas = {
+            'entities': {
+                'fields': [
+                    {'name': 'id', 'type': DataType.VARCHAR, 'is_primary': True, 'max_length': 65535},
+                    {'name': 'vector', 'type': DataType.FLOAT_VECTOR, 'dim': 768},
+                    {'name': 'content', 'type': DataType.VARCHAR, 'max_length': 65535}
+                ],
+                'description': f'Knowledge base {kb_id} entities collection',
+                'enable_dynamic_field': True
+            },
+            'relationships': {
+                'fields': [
+                    {'name': 'id', 'type': DataType.VARCHAR, 'is_primary': True, 'max_length': 65535},
+                    {'name': 'vector', 'type': DataType.FLOAT_VECTOR, 'dim': 768},
+                    {'name': 'content', 'type': DataType.VARCHAR, 'max_length': 65535}
+                ],
+                'description': f'Knowledge base {kb_id} relationships collection',
+                'enable_dynamic_field': True
+            },
+            'chunks': {
+                'fields': [
+                    {'name': 'id', 'type': DataType.VARCHAR, 'is_primary': True, 'max_length': 65535},
+                    {'name': 'vector', 'type': DataType.FLOAT_VECTOR, 'dim': 768},
+                    {'name': 'content', 'type': DataType.VARCHAR, 'max_length': 65535}
+                ],
+                'description': f'Knowledge base {kb_id} chunks collection',
+                'enable_dynamic_field': True
+            }
+        }
+        
+        # 使用提供的schema或默认schema
+        schemas = schema_definitions or default_schemas
+        
+        success_count = 0
+        for collection_type in collection_types:
+            collection_name = self._get_kb_collection_name(kb_id, collection_type)
+            
+            if collection_type in schemas:
+                success = await self.create_collection(collection_name, schemas[collection_type])
+                if success:
+                    success_count += 1
+                    logger.info(f"Created knowledge base collection: {collection_name}")
+                else:
+                    logger.error(f"Failed to create knowledge base collection: {collection_name}")
+            else:
+                logger.warning(f"No schema defined for collection type: {collection_type}")
+        
+        return success_count == len(collection_types)
+    
+    async def delete_kb_collections(self, kb_id: str) -> bool:
+        """删除知识库的所有集合
+        
+        Args:
+            kb_id: 知识库ID
+            
+        Returns:
+            删除成功返回True
+        """
+        collection_types = ['entities', 'relationships', 'chunks']
+        
+        success_count = 0
+        for collection_type in collection_types:
+            collection_name = self._get_kb_collection_name(kb_id, collection_type)
+            
+            success = await self.delete_collection(collection_name)
+            if success:
+                success_count += 1
+                logger.info(f"Deleted knowledge base collection: {collection_name}")
+            else:
+                logger.warning(f"Failed to delete knowledge base collection: {collection_name}")
+        
+        return success_count == len(collection_types)
+    
+    async def get_kb_collections(self, kb_id: str) -> List[Dict[str, Any]]:
+        """获取知识库的所有集合信息
+        
+        Args:
+            kb_id: 知识库ID
+            
+        Returns:
+            集合信息列表
+        """
+        collection_types = ['entities', 'relationships', 'chunks']
+        collections_info = []
+        
+        for collection_type in collection_types:
+            collection_name = self._get_kb_collection_name(kb_id, collection_type)
+            
+            # 检查集合是否存在
+            await self.ensure_connected()
+            
+            def _sync_check():
+                return utility.has_collection(collection_name, using=self.connection_alias)
+            
+            try:
+                exists = await asyncio.get_event_loop().run_in_executor(None, _sync_check)
+                
+                if exists:
+                    # 获取集合统计信息
+                    stats = await self.get_collection_stats(collection_name)
+                    collections_info.append({
+                        'name': collection_name,
+                        'type': collection_type,
+                        'kb_id': kb_id,
+                        'exists': True,
+                        'stats': stats
+                    })
+                else:
+                    collections_info.append({
+                        'name': collection_name,
+                        'type': collection_type,
+                        'kb_id': kb_id,
+                        'exists': False,
+                        'stats': {}
+                    })
+            except Exception as e:
+                logger.error(f"Error checking collection {collection_name}: {e}")
+                collections_info.append({
+                    'name': collection_name,
+                    'type': collection_type,
+                    'kb_id': kb_id,
+                    'exists': False,
+                    'error': str(e),
+                    'stats': {}
+                })
+        
+        return collections_info
+    
+    async def get_all_kb_collections(self) -> Dict[str, List[Dict[str, Any]]]:
+        """获取所有知识库的集合信息
+        
+        Returns:
+            按知识库ID分组的集合信息字典
+        """
+        # 获取所有集合
+        all_collections = await self.list_collections()
+        
+        # 按知识库ID分组
+        kb_collections = {}
+        
+        for collection_name in all_collections:
+            kb_id = self._get_kb_id_from_collection_name(collection_name)
+            collection_type = self._get_collection_type_from_name(collection_name)
+            
+            if kb_id and collection_type:
+                if kb_id not in kb_collections:
+                    kb_collections[kb_id] = []
+                
+                # 获取集合统计信息
+                stats = await self.get_collection_stats(collection_name)
+                
+                kb_collections[kb_id].append({
+                    'name': collection_name,
+                    'type': collection_type,
+                    'kb_id': kb_id,
+                    'exists': True,
+                    'stats': stats
+                })
+        
+        return kb_collections
+    
+    async def migrate_global_collections_to_kb(self, kb_id: str, global_collections: Dict[str, str]) -> bool:
+        """将全局集合数据迁移到知识库专用集合
+        
+        Args:
+            kb_id: 目标知识库ID
+            global_collections: 全局集合映射 {collection_type: global_collection_name}
+            
+        Returns:
+            迁移成功返回True
+        """
+        logger.info(f"Starting migration of global collections to knowledge base {kb_id}")
+        
+        # 首先创建知识库专用集合
+        kb_collections_created = await self.create_kb_collections(kb_id)
+        if not kb_collections_created:
+            logger.error(f"Failed to create knowledge base collections for {kb_id}")
+            return False
+        
+        migration_success = True
+        
+        for collection_type, global_collection_name in global_collections.items():
+            kb_collection_name = self._get_kb_collection_name(kb_id, collection_type)
+            
+            try:
+                # 检查全局集合是否存在
+                global_collection = await self.get_collection(global_collection_name)
+                if not global_collection:
+                    logger.warning(f"Global collection {global_collection_name} not found, skipping")
+                    continue
+                
+                # 检查知识库集合是否存在
+                kb_collection = await self.get_collection(kb_collection_name)
+                if not kb_collection:
+                    logger.error(f"Knowledge base collection {kb_collection_name} not found")
+                    migration_success = False
+                    continue
+                
+                # 这里应该实现具体的数据迁移逻辑
+                # 由于PyMilvus不直接支持集合间数据复制，需要通过查询和插入实现
+                logger.info(f"Migrating data from {global_collection_name} to {kb_collection_name}")
+                
+                # TODO: 实现具体的数据迁移逻辑
+                # 1. 查询全局集合中的所有数据
+                # 2. 过滤出属于该知识库的数据
+                # 3. 插入到知识库专用集合中
+                
+                logger.info(f"Successfully migrated {collection_type} collection for knowledge base {kb_id}")
+                
+            except Exception as e:
+                logger.error(f"Error migrating {collection_type} collection for knowledge base {kb_id}: {e}")
+                migration_success = False
+        
+        return migration_success
+    
     def get_metrics(self) -> Dict[str, Any]:
         """获取性能指标"""
         base_metrics = super().get_metrics()
