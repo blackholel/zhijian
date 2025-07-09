@@ -17,6 +17,7 @@ from ..repositories.knowledge_node_repository import KnowledgeNodeRepository
 from ..repositories.permission_mixin import PermissionValidator, AuditLogger
 from ..connection_manager import DatabaseConnectionManager
 from server.models.kb_models import KnowledgeDatabase, KnowledgeFile, KnowledgeNode
+from ...services.file_status_manager import FileStatusManager
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,9 @@ class KnowledgeBaseManager:
         
         # LightRAG适配器 - 集成现有LightRAG系统
         self.lightrag_adapter = LightRAGAdapter(self)
+        
+        # 文件状态管理器 - 集成状态管理服务
+        self.status_manager = FileStatusManager(connection_manager)
     
     # 知识库管理方法
     
@@ -468,10 +472,10 @@ class KnowledgeBaseManager:
     
     
     async def _process_document_async(self, file_id: str, user_id: str):
-        """异步文档处理"""
+        """异步文档处理 - 增强状态管理"""
         try:
-            # 更新状态为处理中
-            await self.file_repo.update_file_status(file_id, 'processing')
+            # 更新状态为处理中（带事件发布）
+            await self.status_manager.update_file_status_with_event(file_id, 'processing')
             
             # 获取文件信息
             file_obj = await self.file_repo.get_by_id(file_id, user_id, check_permission=False)
@@ -524,14 +528,14 @@ class KnowledgeBaseManager:
             if embeddings:
                 await self._store_vectors(file_id, file_obj.database_id, chunks, embeddings)
             
-            # 更新文件状态为完成
-            await self.file_repo.update_file_status(file_id, 'completed')
+            # 更新文件状态为完成（带事件发布）
+            await self.status_manager.update_file_status_with_event(file_id, 'completed')
             
             logger.info(f"文档处理完成: {file_id}, {len(chunks)} 个分块")
             
         except Exception as e:
-            # 更新状态为失败
-            await self.file_repo.update_file_status(file_id, 'failed')
+            # 更新状态为失败（带事件发布和错误信息）
+            await self.status_manager.update_file_status_with_event(file_id, 'failed', str(e))
             logger.error(f"文档处理失败: {e}")
             import traceback
             logger.error(traceback.format_exc())

@@ -107,7 +107,6 @@ pnpm dev
 - **server/**: FastAPI后端，提供认证、对话和图谱API
 - **src/**: 核心应用逻辑，包括代理、模型和插件
   - **src/database/**: 统一数据库管理系统
-  - **src/file/**: 文件管理系统
 - **web/**: Vue.js前端，提供图谱可视化和对话界面
 
 ### 关键技术栈
@@ -168,7 +167,6 @@ pnpm dev
 - **权限认证**: 统一使用 `server/auth/rbac_middleware.py` 进行JWT认证和权限验证
 - **权限框架**: 位于 `server/auth/permission_framework/` 的完整权限管理系统
 - **数据库访问**: 使用 `src/database/` 统一数据库管理系统
-- **文件管理**: 使用 `src/file/` 文件管理系统
 - 数据库模型位于 `server/models/`
 - API路由位于 `server/routers/`
 
@@ -413,99 +411,148 @@ server/db_manager.py → src/database/manager.py ❌
 - ✅ 数据库访问功能完整
 - ✅ 兼容性接口保留
 
-#### SQLAlchemy对象生命周期管理优化 (2025-07-09)
+#### 文件状态管理架构优化 (2025-07-09)
 
 **问题背景**：
-系统出现SQLAlchemy DetachedInstanceError问题：
-```
-Instance <KnowledgeFile> is not bound to a Session; 
-attribute refresh operation cannot proceed
-```
-
-**根本原因**：
-1. **会话分离问题**: 对象在数据库会话关闭后仍被访问
-2. **缓存序列化失败**: Redis缓存无法正确处理SQLAlchemy对象
-3. **lazy-loading失败**: `to_dict()`方法访问已分离对象的属性时失败
-4. **复杂依赖关系**: `computed_node_count`依赖`nodes`关系，在缓存对象中无法正确计算
+文件状态接口出现 `'KnowledgeFile' object has no attribute 'updated_at'` 错误，暴露了多个架构问题：
+1. **数据模型不完整**: 缺少 `updated_at` 和 `last_processed_at` 字段
+2. **状态管理逻辑混乱**: 缓存策略不一致，错误处理不完善
+3. **接口设计不一致**: API返回格式与底层模型不匹配
 
 **解决方案**：
 
-1. **预加载和对象分离策略**
+1. **数据库模型优化**
+   ```sql
+   -- 添加缺失的时间字段
+   ALTER TABLE knowledge_files 
+   ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+   ADD COLUMN last_processed_at TIMESTAMP NULL;
+   
+   -- 创建自动更新触发器
+   CREATE OR REPLACE FUNCTION update_updated_at_column()
+   RETURNS TRIGGER AS $$
+   BEGIN
+       NEW.updated_at = CURRENT_TIMESTAMP;
+       RETURN NEW;
+   END;
+   $$ language 'plpgsql';
+   
+   CREATE TRIGGER update_knowledge_files_updated_at
+       BEFORE UPDATE ON knowledge_files
+       FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+   ```
+
+2. **SQLAlchemy模型更新**
    ```python
-   def _preload_and_detach_file(self, session: Session, file_obj: KnowledgeFile):
-       """预加载所有必要属性并分离对象，避免Session关闭后的LazyLoading问题"""
-       # 预加载所有基本属性
-       _ = file_obj.file_id, file_obj.filename, file_obj.path...
-       _ = file_obj.nodes  # 通过selectinload预加载关系
+   class KnowledgeFile(Base):
+       created_at = Column(DateTime, default=func.now())
+       updated_at = Column(DateTime, default=func.now(), onupdate=func.now())  # 新增
+       last_processed_at = Column(DateTime, nullable=True)  # 新增
        
-       # 从Session中分离对象
-       session.expunge(file_obj)
-       return file_obj
+       def _safe_get_datetime_iso(self, field_name='created_at'):
+           """安全获取ISO格式时间字符串，支持多种数据类型"""
+           # 统一时间字段处理逻辑
    ```
 
-2. **优化缓存策略 - 字典序列化**
+3. **数据传输对象(DTO)架构**
    ```python
-   async def _set_file_cache(self, key: str, files: List[KnowledgeFile]):
-       """设置文件缓存，只缓存基本信息避免复杂对象序列化"""
-       cached_data = []
-       for file_obj in files:
-           file_dict = {
-               "file_id": getattr(file_obj, 'file_id', None),
-               "filename": getattr(file_obj, 'filename', None),
-               # ... 其他基本属性
-               "node_count": len(getattr(file_obj, 'nodes', []))  # 预计算
-           }
-           cached_data.append(file_dict)
-   ```
-
-3. **增强验证的对象重建**
-   ```python
-   async def _get_file_cache(self, key: str) -> Optional[List[KnowledgeFile]]:
-       """从缓存获取文件列表，增强验证逻辑确保对象安全重建"""
-       # 类型检查，确保缓存数据格式正确
-       if not isinstance(cached_data, list): return None
+   # 新建 src/services/dto/file_status_dto.py
+   @dataclass
+   class FileStatusDto:
+       """标准化的文件状态数据传输对象"""
+       file_id: str
+       filename: str
+       status: str
+       created_at: Optional[str] = None
+       updated_at: Optional[str] = None
+       last_processed_at: Optional[str] = None
        
-       # 安全属性设置，异常处理
-       # 预计算属性缓存，避免运行时依赖
+       @classmethod
+       def from_knowledge_file(cls, file_obj: Any) -> 'FileStatusDto':
+           """从KnowledgeFile对象安全转换"""
    ```
 
-4. **支持缓存的模型属性**
+4. **现有Redis适配器集成**
    ```python
-   @property
-   def computed_node_count(self):
-       """动态计算节点数量，支持缓存值"""
-       # 优先使用缓存的node_count（用于从缓存重建的对象）
-       if hasattr(self, '_cached_node_count'):
-           return self._cached_node_count
-       # 否则动态计算（用于从数据库查询的对象）
-       return len(self.nodes) if self.nodes is not None else 0
+   class FileStatusCache:
+       """复用现有Redis适配器，移除重复的缓存管理代码"""
+       async def _get_redis_adapter(self):
+           return await self.connection_manager.get_adapter('redis')
+       
+       async def set(self, key: str, value: Any, ttl: int = None):
+           # 直接使用Redis适配器的序列化功能
+           await redis_adapter.set(key, value, ttl)
    ```
 
-**修复的方法**：
-- ✅ `get_files_by_database` - 获取知识库文件列表
-- ✅ `get_files_by_user` - 获取用户文件列表  
-- ✅ `find_all` - 获取所有文件列表
-- ✅ `get_by_id` - 获取单个文件详情
-- ✅ `create` - 创建文件记录
+5. **分层架构设计**
+   ```
+   ┌─────────────────┐
+   │  API Router     │ ← 接口层：权限验证、参数校验
+   ├─────────────────┤
+   │  StatusManager  │ ← 业务层：状态管理、事件发布
+   ├─────────────────┤
+   │  DTO Layer      │ ← 数据层：标准化数据格式
+   ├─────────────────┤
+   │  Cache Layer    │ ← 缓存层：多级缓存策略
+   ├─────────────────┤
+   │  Repository     │ ← 数据访问层：数据库操作
+   └─────────────────┘
+   ```
 
-**技术要点**：
-- **预加载模式**: 使用`selectinload`和手动属性访问确保数据完整性
-- **对象分离**: `session.expunge()`断开对象与会话的关联
-- **缓存优化**: 字典序列化代替对象序列化，提高可靠性和性能
-- **增强验证**: 类型检查、异常处理、安全默认值
-- **预计算属性**: 避免运行时复杂依赖关系
+**架构原则实施**：
+
+**单一职责**:
+- `FileStatusDto`: 专门负责数据传输和序列化
+- `FileStatusCache`: 专门负责缓存管理
+- `FileStatusManager`: 专门负责业务逻辑
+
+**清晰边界**:
+- DTO层与业务逻辑分离
+- 缓存层与数据访问层解耦
+- 错误处理统一管理
+
+**可扩展接口**:
+- 支持多种状态类型(枚举)
+- 支持事件驱动的状态变化通知
+- 支持多种缓存后端
+
+**高内聚低耦合**:
+- 模块内部功能高度相关
+- 模块间依赖最小化
+- 通过接口而非实现依赖
+
+**事件驱动**:
+```python
+class FileStatusEventDto:
+    """文件状态事件DTO"""
+    @classmethod
+    def create_status_change_event(cls, file_id: str, kb_id: str, 
+                                 old_status: str, new_status: str):
+        # 标准化事件格式
+```
+
+**容错设计**:
+- Redis不可用时自动降级到内存缓存
+- 缓存失败不影响核心业务逻辑
+- 数据转换失败时提供安全默认值
 
 **性能改进**：
-- ✅ 解决DetachedInstanceError，确保系统稳定性
-- ✅ 保持30分钟缓存TTL，提升查询性能  
-- ✅ 字典序列化比对象序列化更快更可靠
-- ✅ 预计算减少运行时计算开销
+- ✅ 解决 `updated_at` 字段缺失问题
+- ✅ 统一时间字段处理逻辑，支持多种数据类型
+- ✅ 使用现有Redis适配器，避免重复代码
+- ✅ DTO模式提升数据处理性能和可靠性
+- ✅ 多级缓存策略提升响应速度
+
+**可观测性**：
+- 详细的错误日志和性能监控
+- 缓存命中率统计
+- 状态变化事件追踪
+- 健康检查接口
 
 **向后兼容**：
-- ✅ 保持所有现有API接口不变
-- ✅ `to_dict()`方法正常工作
-- ✅ 缓存和非缓存路径都能正确处理
-- ✅ 原有的SQLAlchemy模型功能完整
+- ✅ 保持所有现有API接口格式不变
+- ✅ 兼容现有缓存机制
+- ✅ 渐进式架构演进，不影响现有功能
 
 ### 性能监控
 - Neo4j浏览器：图查询性能

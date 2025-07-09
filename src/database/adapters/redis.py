@@ -571,3 +571,117 @@ class RedisAdapter(CacheAdapter):
             })
         
         return base_metrics
+    
+    # Pub/Sub功能增强
+    
+    async def publish(self, channel: str, message: str) -> bool:
+        """发布消息到Redis频道"""
+        try:
+            if self._use_fallback:
+                logger.warning("Fallback模式下不支持pub/sub")
+                return False
+            
+            result = await self.redis_client.publish(channel, message)
+            logger.debug(f"消息发布成功: {channel}, 订阅者数量: {result}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"消息发布失败 {channel}: {e}")
+            return False
+    
+    async def subscribe(self, channel: str, timeout: int = None):
+        """订阅Redis频道，返回异步生成器"""
+        try:
+            if self._use_fallback:
+                logger.warning("Fallback模式下不支持pub/sub")
+                return
+            
+            # 创建新的连接用于订阅
+            subscribe_client = aioredis.from_url(
+                self._build_redis_url(),
+                decode_responses=self.decode_responses,
+                retry_on_timeout=self.retry_on_timeout,
+                socket_connect_timeout=self.connection_timeout,
+                socket_timeout=self.socket_timeout
+            )
+            
+            pubsub = subscribe_client.pubsub()
+            await pubsub.subscribe(channel)
+            
+            logger.info(f"开始订阅频道: {channel}")
+            
+            try:
+                async for message in pubsub.listen():
+                    if message['type'] == 'message':
+                        yield message['data']
+                    elif message['type'] == 'subscribe':
+                        logger.info(f"订阅成功: {channel}")
+                        
+            except asyncio.CancelledError:
+                logger.info(f"订阅被取消: {channel}")
+            except Exception as e:
+                logger.error(f"订阅过程中出错: {e}")
+            finally:
+                await pubsub.unsubscribe(channel)
+                await pubsub.close()
+                await subscribe_client.close()
+                
+        except Exception as e:
+            logger.error(f"订阅失败 {channel}: {e}")
+    
+    async def subscribe_pattern(self, pattern: str):
+        """订阅Redis频道模式"""
+        try:
+            if self._use_fallback:
+                logger.warning("Fallback模式下不支持pub/sub")
+                return
+            
+            # 创建新的连接用于订阅
+            subscribe_client = aioredis.from_url(
+                self._build_redis_url(),
+                decode_responses=self.decode_responses,
+                retry_on_timeout=self.retry_on_timeout,
+                socket_connect_timeout=self.connection_timeout,
+                socket_timeout=self.socket_timeout
+            )
+            
+            pubsub = subscribe_client.pubsub()
+            await pubsub.psubscribe(pattern)
+            
+            logger.info(f"开始订阅模式: {pattern}")
+            
+            try:
+                async for message in pubsub.listen():
+                    if message['type'] == 'pmessage':
+                        yield {
+                            'channel': message['channel'],
+                            'pattern': message['pattern'],
+                            'data': message['data']
+                        }
+                    elif message['type'] == 'psubscribe':
+                        logger.info(f"模式订阅成功: {pattern}")
+                        
+            except asyncio.CancelledError:
+                logger.info(f"模式订阅被取消: {pattern}")
+            except Exception as e:
+                logger.error(f"模式订阅过程中出错: {e}")
+            finally:
+                await pubsub.punsubscribe(pattern)
+                await pubsub.close()
+                await subscribe_client.close()
+                
+        except Exception as e:
+            logger.error(f"模式订阅失败 {pattern}: {e}")
+    
+    async def get_subscribers_count(self, channel: str) -> int:
+        """获取频道订阅者数量"""
+        try:
+            if self._use_fallback:
+                return 0
+            
+            result = await self.redis_client.pubsub_numsub(channel)
+            return result.get(channel, 0)
+            
+        except Exception as e:
+            logger.error(f"获取订阅者数量失败 {channel}: {e}")
+            return 0

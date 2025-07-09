@@ -80,6 +80,8 @@ class KnowledgeFile(Base):
     file_size = Column(Integer, nullable=True)  # 文件大小
     file_metadata = Column(JSON, nullable=True)  # 文件元数据 (避免与SQLAlchemy的metadata冲突)
     created_at = Column(DateTime, default=func.now())  # 创建时间
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())  # 更新时间
+    last_processed_at = Column(DateTime, nullable=True)  # 最后处理时间
     
     # 权限相关字段
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)  # 上传者
@@ -97,22 +99,56 @@ class KnowledgeFile(Base):
         # 否则动态计算（用于从数据库查询的对象）
         return len(self.nodes) if self.nodes is not None else 0
 
-    def _safe_get_timestamp(self):
-        """安全获取created_at的timestamp，支持缓存对象"""
-        created_at = getattr(self, 'created_at', None)
-        if created_at is None:
+    def _safe_get_timestamp(self, field_name='created_at'):
+        """安全获取时间戳，支持缓存对象"""
+        time_field = getattr(self, field_name, None)
+        if time_field is None:
             return time.time()
         
         # 如果是datetime对象，转换为timestamp
-        if hasattr(created_at, 'timestamp'):
-            return created_at.timestamp()
+        if hasattr(time_field, 'timestamp'):
+            return time_field.timestamp()
         
         # 如果已经是数字（从缓存恢复的），直接返回
-        if isinstance(created_at, (int, float)):
-            return created_at
+        if isinstance(time_field, (int, float)):
+            return time_field
+        
+        # 如果是字符串，尝试解析
+        if isinstance(time_field, str):
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(time_field.replace('Z', '+00:00'))
+                return dt.timestamp()
+            except:
+                pass
         
         # 默认返回当前时间
         return time.time()
+
+    def _safe_get_datetime_iso(self, field_name='created_at'):
+        """安全获取ISO格式时间字符串"""
+        time_field = getattr(self, field_name, None)
+        if time_field is None:
+            return datetime.now().isoformat()
+        
+        # 如果是datetime对象，转换为ISO字符串
+        if hasattr(time_field, 'isoformat'):
+            return time_field.isoformat()
+        
+        # 如果已经是字符串，直接返回
+        if isinstance(time_field, str):
+            return time_field
+        
+        # 如果是数字，转换为datetime再转ISO
+        if isinstance(time_field, (int, float)):
+            try:
+                from datetime import datetime
+                return datetime.fromtimestamp(time_field).isoformat()
+            except:
+                pass
+        
+        # 默认返回当前时间
+        return datetime.now().isoformat()
 
     def to_dict(self, with_nodes=True):
         """转换为字典格式"""
@@ -127,7 +163,9 @@ class KnowledgeFile(Base):
                 "file_size": getattr(self, 'file_size', None),
                 "metadata": getattr(self, 'file_metadata', None) or {},
                 "node_count": self.computed_node_count,
-                "created_at": self._safe_get_timestamp(),
+                "created_at": self._safe_get_timestamp('created_at'),
+                "updated_at": self._safe_get_timestamp('updated_at'),
+                "last_processed_at": self._safe_get_timestamp('last_processed_at') if getattr(self, 'last_processed_at', None) else None,
                 "uploaded_by": str(getattr(self, 'uploaded_by', None)) if getattr(self, 'uploaded_by', None) else None,
                 "database_id": getattr(self, 'database_id', None)
             }
@@ -148,6 +186,8 @@ class KnowledgeFile(Base):
                 "status": getattr(self, 'status', 'unknown'),
                 "node_count": 0,
                 "created_at": time.time(),
+                "updated_at": time.time(),
+                "last_processed_at": None,
                 "nodes": []
             }
 

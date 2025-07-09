@@ -7,6 +7,7 @@ import traceback
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Body, Query, File, UploadFile
+from fastapi.responses import StreamingResponse
 
 from server.auth.rbac_middleware import get_required_user
 from server.auth.permission_framework import require_kb_permission, require_system_permission, Permission
@@ -767,3 +768,325 @@ async def reset_kb_model_config(
     except Exception as e:
         logger.error(f"重置模型配置失败: {e}, {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"重置模型配置失败: {str(e)}")
+
+
+# 文件状态管理接口
+
+@knowledge_router.get("/databases/{kb_id}/files/status")
+@require_kb_permission(Permission.READ, "kb_id")
+async def get_files_status(
+    kb_id: str,
+    status_filter: Optional[str] = Query(None, description="状态过滤: all, uploaded, processing, completed, failed"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页大小"),
+    include_stats: bool = Query(True, description="是否包含统计信息"),
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """获取知识库文件状态 - 分页异步接口"""
+    try:
+        kb_manager = await get_kb_manager()
+        user_id = get_user_id(current_user)
+        
+        # 获取文件状态列表（现在返回DTO对象）
+        status_result = await kb_manager.status_manager.get_files_status_batch(
+            kb_id=kb_id,
+            user_id=user_id,
+            status_filter=status_filter,
+            page=page,
+            page_size=page_size
+        )
+        
+        response = {
+            "success": True,
+            "data": status_result.to_dict(),
+            "kb_id": kb_id
+        }
+        
+        # 如果需要包含统计信息
+        if include_stats:
+            summary = await kb_manager.status_manager.get_status_summary(kb_id, user_id)
+            response["summary"] = summary.to_dict()
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"获取文件状态失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"获取文件状态失败: {str(e)}")
+
+
+@knowledge_router.get("/databases/{kb_id}/files/status/summary")
+@require_kb_permission(Permission.READ, "kb_id")
+async def get_files_status_summary(
+    kb_id: str,
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """获取知识库文件状态摘要"""
+    try:
+        kb_manager = await get_kb_manager()
+        user_id = get_user_id(current_user)
+        
+        summary = await kb_manager.status_manager.get_status_summary(kb_id, user_id)
+        
+        return {
+            "success": True,
+            "data": summary.to_dict(),
+            "kb_id": kb_id
+        }
+        
+    except Exception as e:
+        logger.error(f"获取状态摘要失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"获取状态摘要失败: {str(e)}")
+
+
+@knowledge_router.get("/databases/{kb_id}/files/status/stream")
+@require_kb_permission(Permission.READ, "kb_id")
+async def stream_files_status(
+    kb_id: str,
+    current_user: User = Depends(get_required_user)
+) -> StreamingResponse:
+    """实时文件状态流 - Server-Sent Events"""
+    try:
+        kb_manager = await get_kb_manager()
+        user_id = get_user_id(current_user)
+        
+        async def event_generator():
+            """事件生成器"""
+            try:
+                async for event in kb_manager.status_manager.watch_status_changes(kb_id, user_id):
+                    # 格式化为SSE格式
+                    import json
+                    event_data = json.dumps(event)
+                    yield f"data: {event_data}\n\n"
+                    
+            except Exception as e:
+                logger.error(f"状态流生成失败: {e}")
+                error_event = {
+                    "type": "error",
+                    "data": {"error": str(e)},
+                    "timestamp": datetime.now().isoformat()
+                }
+                yield f"data: {json.dumps(error_event)}\n\n"
+        
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"创建状态流失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"创建状态流失败: {str(e)}")
+
+
+@knowledge_router.post("/databases/{kb_id}/files/{file_id}/reprocess")
+@require_kb_permission(Permission.WRITE, "kb_id")
+async def reprocess_file(
+    kb_id: str,
+    file_id: str,
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """重新处理文件"""
+    try:
+        kb_manager = await get_kb_manager()
+        user_id = get_user_id(current_user)
+        
+        # 检查文件是否存在
+        file_obj = await kb_manager.get_file_details(file_id, user_id, include_nodes=False)
+        if not file_obj:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        # 检查文件是否属于指定知识库
+        if file_obj.database_id != kb_id:
+            raise HTTPException(status_code=400, detail="文件不属于指定知识库")
+        
+        # 重置状态为uploaded并触发重新处理
+        await kb_manager.status_manager.update_file_status_with_event(file_id, 'uploaded')
+        
+        # 异步启动文档处理
+        import asyncio
+        asyncio.create_task(kb_manager._process_document_async(file_id, user_id))
+        
+        return {
+            "success": True,
+            "message": "文件重新处理已启动",
+            "file_id": file_id,
+            "kb_id": kb_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重新处理文件失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"重新处理文件失败: {str(e)}")
+
+
+# 性能监控和调试接口
+
+@knowledge_router.get("/databases/{kb_id}/files/status/health")
+@require_kb_permission(Permission.READ, "kb_id")
+async def get_status_system_health(
+    kb_id: str,
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """获取状态系统健康检查"""
+    try:
+        kb_manager = await get_kb_manager()
+        
+        # 检查状态管理器健康状态
+        health_status = await kb_manager.status_manager.health_check()
+        
+        # 检查Redis连接状态
+        redis_adapter = await kb_manager.connection_manager.get_adapter('redis')
+        redis_status = {
+            "available": redis_adapter.is_available if redis_adapter else False,
+            "pub_sub_enabled": hasattr(redis_adapter, 'publish') if redis_adapter else False
+        }
+        
+        return {
+            "success": True,
+            "data": {
+                "status_manager": health_status,
+                "redis_adapter": redis_status,
+                "kb_id": kb_id
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"健康检查失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"健康检查失败: {str(e)}")
+
+
+@knowledge_router.post("/databases/{kb_id}/files/status/cache/clear")
+@require_kb_permission(Permission.ADMIN, "kb_id")
+async def clear_status_cache(
+    kb_id: str,
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """清除知识库状态缓存（管理员功能）"""
+    try:
+        kb_manager = await get_kb_manager()
+        
+        # 清除状态缓存
+        await kb_manager.status_manager.status_cache.invalidate_kb_cache(kb_id)
+        
+        return {
+            "success": True,
+            "message": "状态缓存已清除",
+            "kb_id": kb_id
+        }
+        
+    except Exception as e:
+        logger.error(f"清除缓存失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"清除缓存失败: {str(e)}")
+
+
+# 性能监控接口
+
+@knowledge_router.get("/monitoring/metrics")
+@require_system_permission(Permission.READ)
+async def get_performance_metrics(
+    operation: Optional[str] = Query(None, description="特定操作的指标"),
+    time_window: int = Query(3600, description="时间窗口（秒）"),
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """获取性能监控指标"""
+    try:
+        kb_manager = await get_kb_manager()
+        
+        # 获取指标摘要
+        metrics_summary = kb_manager.status_manager.performance_monitor.get_metrics_summary(
+            operation=operation,
+            time_window=time_window
+        )
+        
+        # 获取系统指标
+        system_metrics = kb_manager.status_manager.performance_monitor.get_system_metrics()
+        
+        return {
+            "success": True,
+            "data": {
+                "metrics_summary": metrics_summary,
+                "system_metrics": system_metrics.to_dict(),
+                "time_window_hours": time_window / 3600
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"获取性能指标失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"获取性能指标失败: {str(e)}")
+
+
+@knowledge_router.get("/monitoring/operations")
+@require_system_permission(Permission.READ)
+async def get_operation_breakdown(
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """获取操作分解统计"""
+    try:
+        kb_manager = await get_kb_manager()
+        
+        breakdown = kb_manager.status_manager.performance_monitor.get_operation_breakdown()
+        
+        return {
+            "success": True,
+            "data": breakdown
+        }
+        
+    except Exception as e:
+        logger.error(f"获取操作分解失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"获取操作分解失败: {str(e)}")
+
+
+@knowledge_router.get("/monitoring/errors")
+@require_system_permission(Permission.READ)
+async def get_error_analysis(
+    current_user: User = Depends(get_required_user)
+) -> Dict[str, Any]:
+    """获取错误分析"""
+    try:
+        kb_manager = await get_kb_manager()
+        
+        error_analysis = kb_manager.status_manager.performance_monitor.get_error_analysis()
+        
+        return {
+            "success": True,
+            "data": error_analysis
+        }
+        
+    except Exception as e:
+        logger.error(f"获取错误分析失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"获取错误分析失败: {str(e)}")
+
+
+@knowledge_router.get("/monitoring/health")
+async def get_monitoring_health() -> Dict[str, Any]:
+    """获取监控系统健康状态"""
+    try:
+        kb_manager = await get_kb_manager()
+        
+        # 检查状态管理器健康状态
+        status_health = await kb_manager.status_manager.health_check()
+        
+        # 检查性能监控器健康状态
+        monitor_health = await kb_manager.status_manager.performance_monitor.health_check()
+        
+        return {
+            "success": True,
+            "data": {
+                "status_manager": status_health,
+                "performance_monitor": monitor_health,
+                "overall_status": "healthy" if (
+                    status_health.get("status") == "healthy" and 
+                    monitor_health.get("status") == "healthy"
+                ) else "degraded"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"监控健康检查失败: {e}, {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"监控健康检查失败: {str(e)}")
