@@ -12,7 +12,7 @@ import asyncio
 from collections import defaultdict
 
 from .core import PermissionContext, PermissionResult
-from server.db_manager import db_manager
+from src.database.manager import get_database_manager
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -209,7 +209,9 @@ class PermissionAuditLogger:
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """查询审计日志"""
-        db = db_manager.get_session()
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        db = db_manager.get_session_sync()
         try:
             conditions = []
             params = {}

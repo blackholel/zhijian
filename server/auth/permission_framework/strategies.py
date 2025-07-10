@@ -69,10 +69,10 @@ class PermissionStrategy(ABC):
             logger.error(f"Error getting user {user_id}: {e}")
             return None
     
-    def _get_db(self) -> Session:
-        """获取数据库会话（延迟导入）"""
-        from server.db_manager import get_session
-        return get_session()
+    async def _get_db(self) -> Session:
+        """获取数据库会话"""
+        from src.database.manager import get_db_session
+        return get_db_session()
 
 class SuperAdminStrategy(PermissionStrategy):
     """超级管理员策略"""

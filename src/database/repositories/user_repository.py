@@ -502,3 +502,18 @@ class UserRepository(PostgreSQLRepository[UserInfo]):
         except Exception as e:
             logger.error(f"Failed to create or update user {user.user_id}: {e}")
             raise
+    
+    async def is_first_run(self) -> bool:
+        """检查是否是首次运行（没有用户）"""
+        try:
+            query = "SELECT COUNT(*) FROM users WHERE is_active = true"
+            result = await self.execute_query(query)
+            count = result[0][0] if result else 0
+            return count == 0
+        except Exception as e:
+            logger.error(f"Error checking first run: {e}")
+            return True
+    
+    async def check_first_run(self) -> bool:
+        """兼容性方法：检查是否是首次运行"""
+        return await self.is_first_run()

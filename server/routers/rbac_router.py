@@ -16,11 +16,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rbac", tags=["权限管理"])
 
-# 获取数据库会话（兼容性）
-def get_db():
-    """获取数据库会话（兼容性函数）"""
-    from server.db_manager import db_manager
-    db = db_manager.get_session()
+# 获取数据库会话
+async def get_db():
+    """获取数据库会话"""
+    from src.database.manager import get_database_manager
+    db_manager = get_database_manager()
+    await db_manager.initialize()
+    db = db_manager.get_session_sync()
     try:
         yield db
     finally:

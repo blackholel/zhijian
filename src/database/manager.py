@@ -315,3 +315,24 @@ async def get_file_repository_dependency():
     """FastAPI依赖注入：获取文件仓储"""
     db_manager = await get_database_manager_dependency()
     return db_manager.get_file_repository()
+
+
+# 兼容性便捷方法
+
+async def check_first_run() -> bool:
+    """检查是否是首次运行（兼容接口）"""
+    db_manager = get_database_manager()
+    await db_manager.initialize()
+    user_repo = db_manager.get_user_repository()
+    return await user_repo.is_first_run()
+
+def get_db_session():
+    """获取同步数据库会话（兼容接口）"""
+    db_manager = get_database_manager()
+    return db_manager.get_session_sync()
+
+async def get_db_session_async():
+    """获取异步数据库会话（兼容接口）"""
+    db_manager = get_database_manager()
+    await db_manager.initialize()
+    return await db_manager.get_session()

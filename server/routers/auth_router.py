@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime
 
-from server.db_manager import db_manager
+from src.database.manager import get_database_manager, check_first_run
 from server.models.user_model import User, OperationLog
 from server.auth.auth_utils import AuthUtils
 from server.auth.auth_middleware import get_db, get_current_user, get_admin_user, get_superadmin_user, oauth2_scheme
@@ -94,8 +94,8 @@ async def login_for_access_token(
 
 # 路由：校验是否需要初始化管理员
 @auth.get("/check-first-run")
-async def check_first_run():
-    is_first_run = db_manager.check_first_run()
+async def check_first_run_endpoint():
+    is_first_run = await check_first_run()
     return {"first_run": is_first_run}
 
 # 路由：初始化管理员账户
@@ -105,7 +105,7 @@ async def initialize_admin(
     db: Session = Depends(get_db)
 ):
     # 检查是否是首次运行
-    if not db_manager.check_first_run():
+    if not await check_first_run():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="系统已经初始化，无法再次创建初始管理员",

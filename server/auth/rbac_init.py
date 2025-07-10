@@ -8,7 +8,6 @@ from sqlalchemy import text
 from datetime import datetime
 
 from server.models.user_model import Role, Permission, RolePermission
-from server.db_manager import db_manager
 from src.database.manager import get_database_manager
 
 logger = logging.getLogger(__name__)
@@ -142,11 +141,14 @@ class RBACInitializer:
     """RBAC系统初始化器"""
     
     def __init__(self):
-        self.db = db_manager.get_session()
+        self.db_manager = get_database_manager()
+        self.db = None
     
-    def init_permissions(self):
+    async def init_permissions(self):
         """初始化系统权限"""
         try:
+            await self.db_manager.initialize()
+            self.db = self.db_manager.get_session_sync()
             logger.info("开始初始化系统权限...")
             
             for perm_name, display_name, resource_type, action, description in SYSTEM_PERMISSIONS:
@@ -181,9 +183,12 @@ class RBACInitializer:
             logger.error(f"初始化权限失败: {e}")
             raise
     
-    def init_roles(self):
+    async def init_roles(self):
         """初始化系统角色"""
         try:
+            if not self.db:
+                await self.db_manager.initialize()
+                self.db = self.db_manager.get_session_sync()
             logger.info("开始初始化系统角色...")
             
             for role_data in SYSTEM_ROLES:
@@ -276,9 +281,12 @@ class RBACInitializer:
             logger.error(f"为角色分配权限失败: {e}")
             raise
     
-    def migrate_old_users(self):
+    async def migrate_old_users(self):
         """迁移旧用户到新的RBAC系统"""
         try:
+            if not self.db:
+                await self.db_manager.initialize()
+                self.db = self.db_manager.get_session_sync()
             logger.info("开始迁移旧用户...")
             
             # 查找所有没有external_user_id的用户
@@ -347,13 +355,13 @@ class RBACInitializer:
             await db_manager.initialize()
             
             # 初始化权限
-            self.init_permissions()
+            await self.init_permissions()
             
             # 初始化角色
-            self.init_roles()
+            await self.init_roles()
             
             # 迁移旧用户
-            self.migrate_old_users()
+            await self.migrate_old_users()
             
             logger.info("RBAC系统初始化完成!")
             
@@ -361,7 +369,8 @@ class RBACInitializer:
             logger.error(f"RBAC系统初始化失败: {e}")
             raise
         finally:
-            self.db.close()
+            if self.db:
+                self.db.close()
 
 async def init_rbac_system():
     """初始化RBAC系统的便捷函数"""

@@ -9,7 +9,7 @@ import logging
 
 from .core import ResourceType, ResourceIdentifier
 from .resources import Resource
-from server.db_manager import db_manager
+from src.database.manager import get_database_manager
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,9 @@ class KnowledgeBaseResource(Resource):
     
     async def get_owner(self) -> Optional[str]:
         """获取知识库所有者"""
-        db = db_manager.get_session()
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        db = db_manager.get_session_sync()
         try:
             result = db.execute(text("""
                 SELECT owner_id FROM knowledge_databases 
@@ -37,7 +39,9 @@ class KnowledgeBaseResource(Resource):
     
     async def get_resource_attributes(self) -> Dict[str, Any]:
         """获取知识库属性"""
-        db = db_manager.get_session()
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        db = db_manager.get_session_sync()
         try:
             result = db.execute(text("""
                 SELECT is_public, access_level, meta_info, created_at
@@ -73,7 +77,9 @@ class ChatSessionResource(Resource):
     
     async def get_owner(self) -> Optional[str]:
         """获取对话会话所有者"""
-        db = db_manager.get_session()
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        db = db_manager.get_session_sync()
         try:
             # 假设有chat_sessions表
             result = db.execute(text("""
@@ -96,7 +102,9 @@ class ChatSessionResource(Resource):
     
     async def get_resource_attributes(self) -> Dict[str, Any]:
         """获取对话会话属性"""
-        db = db_manager.get_session()
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        db = db_manager.get_session_sync()
         try:
             # 假设有chat_sessions表
             result = db.execute(text("""
@@ -251,7 +259,9 @@ class UserProfileResource(Resource):
     
     async def get_resource_attributes(self) -> Dict[str, Any]:
         """获取用户资料属性"""
-        db = db_manager.get_session()
+        db_manager = get_database_manager()
+        await db_manager.initialize()
+        db = db_manager.get_session_sync()
         try:
             result = db.execute(text("""
                 SELECT username, email, is_active, created_at, login_name

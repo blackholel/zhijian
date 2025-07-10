@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 import re
 
-from server.db_manager import db_manager
+from src.database.manager import get_database_manager
 from server.models.user_model import User
 from server.auth.auth_utils import AuthUtils
 
@@ -23,12 +23,14 @@ PUBLIC_PATHS = [
 ]
 
 # 获取数据库会话
-def get_db():
-    db = db_manager.get_session()
+async def get_db():
+    db_manager = get_database_manager()
+    await db_manager.initialize()
+    session = db_manager.get_session_sync()
     try:
-        yield db
+        yield session
     finally:
-        db.close()
+        session.close()
 
 # 获取当前用户
 async def get_current_user(token: str | None = Depends(oauth2_scheme), db: Session = Depends(get_db)):

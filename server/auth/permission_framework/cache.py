@@ -201,10 +201,12 @@ class UnifiedPermissionCache:
             user_perms_key = CacheKey.user_permissions_key(user_id)
             if not await self.l2_cache.get(user_perms_key):
                 # 从数据库加载权限
-                from server.db_manager import db_manager
+                from src.database.manager import get_database_manager
                 from sqlalchemy import text
                 
-                db = db_manager.get_session()
+                db_manager = get_database_manager()
+                await db_manager.initialize()
+                db = db_manager.get_session_sync()
                 try:
                     # 查询用户权限并缓存 - 支持external_user_id
                     query = text("""
