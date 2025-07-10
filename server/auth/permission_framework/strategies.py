@@ -10,7 +10,7 @@ from sqlalchemy import text
 import logging
 
 from .core import PermissionContext, PermissionResult, Permission, ResourceType
-from server.models.user_model import User
+from server.auth.models.user_models import User
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class SuperAdminStrategy(PermissionStrategy):
         if user_info:
             try:
                 # 转换为User模型对象以兼容rbac中间件
-                from server.models.user_model import User
+                from server.auth.models.user_models import User
                 user = User(
                     id=user_info.user_id,
                     external_user_id=user_info.external_user_id,
@@ -155,7 +155,7 @@ class SystemPermissionStrategy(PermissionStrategy):
         if user_info:
             try:
                 # 转换为User模型对象以兼容rbac中间件
-                from server.models.user_model import User
+                from server.auth.models.user_models import User
                 user = User(
                     id=user_info.user_id,
                     external_user_id=user_info.external_user_id,

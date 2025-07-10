@@ -13,7 +13,7 @@ import logging
 from .core import Permission, ResourceType, ResourceIdentifier, PermissionContext
 from .concrete_resources import ResourceFactory
 from .engine import PermissionEngine
-from server.models.user_model import User
+from server.auth.models.user_models import User
 
 logger = logging.getLogger(__name__)
 

@@ -3,8 +3,8 @@ from fastapi import APIRouter
 from server.routers.base_router import base
 from server.routers.auth_router import auth
 from server.routers.graph_router import graph
-from server.routers.rbac_router import router as rbac_router
-from server.routers.permission_router import permission_mgmt
+from server.auth.routers.rbac_router import router as rbac_router
+from server.auth.routers.permission_router import permission_mgmt
 from server.routers.database_router import router as database_router
 from server.routers.knowledge_router import knowledge_router
 from server.routers.kb_collection_router import router as kb_collection_router

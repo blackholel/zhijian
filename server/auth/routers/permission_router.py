@@ -10,8 +10,8 @@ from datetime import datetime
 from server.auth.permission_framework import (
     get_permission_framework, require_system_permission, Permission
 )
-from server.models.user_model import User
-from server.auth.rbac_middleware import get_required_user
+from server.auth.models.user_models import User
+from server.auth.middleware.rbac_middleware import get_required_user
 
 permission_mgmt = APIRouter(prefix="/permission-framework")
 

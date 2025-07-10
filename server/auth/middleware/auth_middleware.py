@@ -5,8 +5,8 @@ from jose import JWTError, jwt
 import re
 
 from src.database.manager import get_database_manager
-from server.models.user_model import User
-from server.auth.auth_utils import AuthUtils
+from server.auth.models.user_models import User
+from server.auth.utils.auth_utils import AuthUtils
 
 # 定义OAuth2密码承载器，指定token URL
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)

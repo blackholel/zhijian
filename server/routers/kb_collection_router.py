@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
-from server.auth.rbac_middleware import require_permission, get_required_user
-from server.models.user_model import User
+from server.auth.middleware.rbac_middleware import require_permission, get_required_user
+from server.auth.models.user_models import User
 from src.database.managers.kb_collection_manager import get_kb_collection_manager
 
 logger = logging.getLogger(__name__)

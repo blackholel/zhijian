@@ -5,9 +5,9 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from src.database.manager import get_database_manager, check_first_run
-from server.models.user_model import User, OperationLog
-from server.auth.auth_utils import AuthUtils
-from server.auth.auth_middleware import get_db, get_current_user, get_admin_user, get_superadmin_user, oauth2_scheme
+from server.auth.models.user_models import User, OperationLog
+from server.auth.utils.auth_utils import AuthUtils
+from server.auth.middleware.auth_middleware import get_db, get_current_user, get_admin_user, get_superadmin_user, oauth2_scheme
 
 # 创建路由器
 auth = APIRouter(prefix="/auth", tags=["auth"])

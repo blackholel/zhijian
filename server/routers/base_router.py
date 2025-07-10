@@ -5,8 +5,8 @@ from fastapi import Request, Body, Depends, HTTPException
 from fastapi import APIRouter
 
 from src import config, knowledge_base, graph_base
-from server.auth.rbac_middleware import get_admin_user, get_superadmin_user
-from server.models.user_model import User
+from server.auth.middleware.rbac_middleware import get_admin_user, get_superadmin_user
+from server.auth.models.user_models import User
 from src.utils.logging_config import logger
 
 
