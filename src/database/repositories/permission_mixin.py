@@ -160,7 +160,7 @@ class PermissionValidator:
         try:
             # 通过文件获取知识库ID
             async with await kb_repo.get_session() as session:
-                from server.models.kb_models import KnowledgeFile
+                from src.knowledge_base.models.kb_models import KnowledgeFile
                 file_obj = session.query(KnowledgeFile).filter(
                     KnowledgeFile.file_id == file_id
                 ).first()
@@ -182,7 +182,7 @@ class PermissionValidator:
         try:
             # 通过节点获取知识库ID
             async with await kb_repo.get_session() as session:
-                from server.models.kb_models import KnowledgeNode, KnowledgeFile
+                from src.knowledge_base.models.kb_models import KnowledgeNode, KnowledgeFile
                 node = session.query(KnowledgeNode).join(KnowledgeFile).filter(
                     KnowledgeNode.id == node_id
                 ).first()

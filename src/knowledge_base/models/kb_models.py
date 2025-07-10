@@ -2,10 +2,11 @@ from sqlalchemy import Column, Integer, String, DateTime, JSON, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from sqlalchemy.ext.declarative import declarative_base
 import time
 import uuid
 
-from server.models import Base
+Base = declarative_base()
 
 class KnowledgeDatabase(Base):
     """知识库模型"""

@@ -12,7 +12,7 @@ from sqlalchemy import and_, or_, func
 
 from .base import PostgreSQLRepository
 from ..connection_manager import DatabaseConnectionManager
-from server.models.kb_models import KnowledgeNode, KnowledgeFile, KnowledgeDatabase
+from src.knowledge_base.models.kb_models import KnowledgeNode, KnowledgeFile, KnowledgeDatabase
 from server.auth.models.user_models import User
 
 logger = logging.getLogger(__name__)

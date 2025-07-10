@@ -16,7 +16,7 @@ from ..repositories.knowledge_file_repository import KnowledgeFileRepository
 from ..repositories.knowledge_node_repository import KnowledgeNodeRepository
 from ..repositories.permission_mixin import PermissionValidator, AuditLogger
 from ..connection_manager import DatabaseConnectionManager
-from server.models.kb_models import KnowledgeDatabase, KnowledgeFile, KnowledgeNode
+from src.knowledge_base.models.kb_models import KnowledgeDatabase, KnowledgeFile, KnowledgeNode
 from ...services.file_status_manager import FileStatusManager
 
 logger = logging.getLogger(__name__)

@@ -228,7 +228,8 @@ class UnifiedDatabaseManager:
             adapter = asyncio.run(self.get_postgresql_adapter())
             if adapter and hasattr(adapter, 'create_tables_if_not_exists'):
                 # 需要传入metadata，这里需要从实际模型中获取
-                from server.models import Base
+                from sqlalchemy.ext.declarative import declarative_base
+                Base = declarative_base()
                 asyncio.run(adapter.create_tables_if_not_exists(Base.metadata))
         except Exception as e:
             logger.error(f"Failed to create tables: {e}")
