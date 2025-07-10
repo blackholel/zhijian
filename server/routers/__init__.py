@@ -1,5 +1,4 @@
 from fastapi import APIRouter
-from server.routers.chat_router import chat
 # from server.routers.data_router import data  # 注释掉无权限控制的 data_router，统一使用 knowledge_router
 from server.routers.base_router import base
 from server.routers.auth_router import auth
@@ -12,7 +11,6 @@ from server.routers.kb_collection_router import router as kb_collection_router
 
 router = APIRouter()
 router.include_router(base)
-router.include_router(chat)
 # router.include_router(data)  # 注释掉无权限控制的 data_router，统一使用 knowledge_router
 router.include_router(auth)
 router.include_router(graph)
