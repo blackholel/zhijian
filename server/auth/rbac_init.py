@@ -9,7 +9,7 @@ from datetime import datetime
 
 from server.models.user_model import Role, Permission, RolePermission
 from server.db_manager import db_manager
-from server.utils.redis_manager import init_redis
+from src.database.manager import get_database_manager
 
 logger = logging.getLogger(__name__)
 
@@ -336,14 +336,15 @@ class RBACInitializer:
             logger.error(f"迁移旧用户失败: {e}")
             raise
     
-    def initialize_rbac_system(self):
+    async def initialize_rbac_system(self):
         """初始化整个RBAC系统"""
         try:
             logger.info("开始初始化RBAC系统...")
             
-            # 初始化Redis
-            logger.info("初始化Redis连接...")
-            init_redis(password="A6pgsql202#00624")
+            # 初始化数据库管理器
+            logger.info("初始化数据库管理器...")
+            db_manager = get_database_manager()
+            await db_manager.initialize()
             
             # 初始化权限
             self.init_permissions()
@@ -362,14 +363,16 @@ class RBACInitializer:
         finally:
             self.db.close()
 
-def init_rbac_system():
+async def init_rbac_system():
     """初始化RBAC系统的便捷函数"""
     initializer = RBACInitializer()
-    initializer.initialize_rbac_system()
+    await initializer.initialize_rbac_system()
 
 if __name__ == "__main__":
+    import asyncio
+    
     # 设置日志级别
     logging.basicConfig(level=logging.INFO)
     
     # 初始化RBAC系统
-    init_rbac_system()
+    asyncio.run(init_rbac_system())
