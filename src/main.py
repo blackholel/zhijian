@@ -7,12 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from server.routers import router
+from src.routers import router
 from src.auth.middleware.auth_middleware import is_public_path
 from src.auth.middleware.rbac_middleware import rbac_middleware
 from src.auth.permission_framework import initialize_permission_framework, shutdown_permission_framework
 from src.utils.logging_config import logger
 from src.database.manager import initialize_global_database_manager, shutdown_global_database_manager
+from src.database.init_tables import initialize_database_tables
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,6 +24,11 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing unified database manager...")
         await initialize_global_database_manager()
         logger.info("Unified database manager initialized successfully")
+        
+        # 初始化数据库表
+        logger.info("Initializing database tables...")
+        await initialize_database_tables()
+        logger.info("Database tables initialized successfully")
         
         # 初始化权限框架
         logger.info("Initializing permission framework...")

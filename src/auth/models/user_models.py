@@ -2,10 +2,9 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Bool
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
 import uuid
 
-Base = declarative_base()
+from src.database.models import Base
 
 class User(Base):
     """用户模型"""
