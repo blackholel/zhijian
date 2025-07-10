@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any, Set
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from server.auth.models.user_models import Permission, RolePermission, UserRole
+from src.auth.models.user_models import Permission, RolePermission, UserRole
 
 
 class PermissionService:

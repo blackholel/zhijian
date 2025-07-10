@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime
 
-from server.auth.models.user_models import Role, Permission, RolePermission
+from src.auth.models.user_models import Role, Permission, RolePermission
 from src.database.manager import get_database_manager
 
 logger = logging.getLogger(__name__)

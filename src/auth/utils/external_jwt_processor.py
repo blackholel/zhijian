@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 import logging
 
-from server.auth.models.user_models import User
+from src.auth.models.user_models import User
 from src.database.repositories.user_repository import UserRepository, UserInfo
 
 logger = logging.getLogger(__name__)

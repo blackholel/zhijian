@@ -7,11 +7,11 @@ from datetime import datetime
 from fastapi import APIRouter, Query, HTTPException, Depends, Body
 from pydantic import BaseModel
 
-from server.auth.middleware.rbac_middleware import get_required_user, get_admin_user
-from server.auth.permission_framework import (
+from src.auth.middleware.rbac_middleware import get_required_user, get_admin_user
+from src.auth.permission_framework import (
     require_kb_permission, require_system_permission, Permission
 )
-from server.auth.models.user_models import User
+from src.auth.models.user_models import User
 from src import knowledge_base
 from src.core.graph_adapter import get_unified_graph_adapter
 from src.database.manager import get_database_manager_dependency

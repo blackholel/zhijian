@@ -8,8 +8,8 @@ import logging
 
 from src.database.manager import get_database_manager_dependency, get_user_repository_dependency
 from src.database.repositories.user_repository import UserRepository
-from server.auth.models.user_models import User, Role, Permission, UserRole, RolePermission
-from server.auth.middleware.rbac_middleware import get_required_user, require_permission, rbac_middleware
+from src.auth.models.user_models import User, Role, Permission, UserRole, RolePermission
+from src.auth.middleware.rbac_middleware import get_required_user, require_permission, rbac_middleware
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)

@@ -7,8 +7,8 @@ import logging
 
 from src.database.manager import get_database_manager_dependency, get_user_repository_dependency
 from src.database.repositories.user_repository import UserRepository, UserInfo
-from server.auth.models.user_models import User
-from server.auth.utils.external_jwt_processor import ExternalJWTProcessor, JWTAuthenticationError
+from src.auth.models.user_models import User
+from src.auth.utils.external_jwt_processor import ExternalJWTProcessor, JWTAuthenticationError
 
 logger = logging.getLogger(__name__)
 

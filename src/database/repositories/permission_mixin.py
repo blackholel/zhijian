@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, Union
 from functools import wraps
 from datetime import datetime
 
-from server.auth.permission_framework import PermissionEngine, KnowledgeBaseResource, Permission
+from src.auth.permission_framework import PermissionEngine, KnowledgeBaseResource, Permission
 
 logger = logging.getLogger(__name__)
 

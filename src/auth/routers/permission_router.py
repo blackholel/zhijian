@@ -7,11 +7,11 @@ from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from typing import Optional, List
 from datetime import datetime
 
-from server.auth.permission_framework import (
+from src.auth.permission_framework import (
     get_permission_framework, require_system_permission, Permission
 )
-from server.auth.models.user_models import User
-from server.auth.middleware.rbac_middleware import get_required_user
+from src.auth.models.user_models import User
+from src.auth.middleware.rbac_middleware import get_required_user
 
 permission_mgmt = APIRouter(prefix="/permission-framework")
 
@@ -113,7 +113,7 @@ async def test_permission(
     current_user: User = Depends(get_required_user)
 ):
     """测试指定用户对资源的权限"""
-    from server.auth.permission_framework import (
+    from src.auth.permission_framework import (
         PermissionEngine, ResourceFactory, ResourceIdentifier, Permission as PermEnum
     )
     
@@ -150,7 +150,7 @@ async def test_permission(
 @permission_mgmt.get("/supported-resources")
 async def get_supported_resources():
     """获取支持的资源类型"""
-    from server.auth.permission_framework import ResourceFactory, ResourceType
+    from src.auth.permission_framework import ResourceFactory, ResourceType
     
     supported_types = ResourceFactory.get_supported_types()
     return {
@@ -170,7 +170,7 @@ async def get_supported_resources():
 @permission_mgmt.get("/permissions")
 async def get_available_permissions():
     """获取可用的权限类型"""
-    from server.auth.permission_framework import Permission as PermEnum
+    from src.auth.permission_framework import Permission as PermEnum
     
     return {
         "permissions": [p.value for p in PermEnum],

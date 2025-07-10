@@ -263,7 +263,11 @@ class RedisAdapter(CacheAdapter):
         if isinstance(value, bytes):
             try:
                 return pickle.loads(value)
-            except:
+            except Exception as e:
+                # 处理模块路径变更导致的pickle反序列化失败
+                if 'server.auth' in str(e):
+                    logger.warning(f"Detected outdated pickle data with server.auth reference, skipping: {e}")
+                    return None
                 try:
                     return json.loads(value.decode())
                 except:

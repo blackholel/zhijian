@@ -9,9 +9,9 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Body, Query, File, UploadFile
 from fastapi.responses import StreamingResponse
 
-from server.auth.middleware.rbac_middleware import get_required_user
-from server.auth.permission_framework import require_kb_permission, require_system_permission, Permission
-from server.auth.models.user_models import User
+from src.auth.middleware.rbac_middleware import get_required_user
+from src.auth.permission_framework import require_kb_permission, require_system_permission, Permission
+from src.auth.models.user_models import User
 from src.database.connection_manager import DatabaseConnectionManager
 from src.database.managers.knowledge_manager import KnowledgeBaseManager
 

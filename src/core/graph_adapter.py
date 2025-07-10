@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from src.database.manager import get_database_manager
 from src.database.repositories.graph_repository import GraphRepository, GraphTriple, GraphNode
 from src.database.repositories.permission_mixin import PermissionValidator
-from server.auth.permission_framework import Permission
+from src.auth.permission_framework import Permission
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class UnifiedGraphAdapter:
         graph_repo = self.db_manager.get_graph_repository()
         
         # 设置权限引擎
-        from server.auth.permission_framework import PermissionEngine
+        from src.auth.permission_framework import PermissionEngine
         permission_engine = PermissionEngine.get_instance()
         graph_repo.set_permission_engine(permission_engine)
         

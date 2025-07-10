@@ -8,9 +8,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from server.routers import router
-from server.auth.middleware.auth_middleware import is_public_path
-from server.auth.middleware.rbac_middleware import rbac_middleware
-from server.auth.permission_framework import initialize_permission_framework, shutdown_permission_framework
+from src.auth.middleware.auth_middleware import is_public_path
+from src.auth.middleware.rbac_middleware import rbac_middleware
+from src.auth.permission_framework import initialize_permission_framework, shutdown_permission_framework
 from src.utils.logging_config import logger
 from src.database.manager import initialize_global_database_manager, shutdown_global_database_manager
 

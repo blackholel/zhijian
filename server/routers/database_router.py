@@ -12,8 +12,8 @@ from src.database.manager import (
     get_user_repository_dependency,
     UnifiedDatabaseManager
 )
-from server.auth.middleware.rbac_middleware import get_admin_user, get_superadmin_user
-from server.auth.models.user_models import User
+from src.auth.middleware.rbac_middleware import get_admin_user, get_superadmin_user
+from src.auth.models.user_models import User
 from src.utils.logging_config import logger
 
 router = APIRouter(prefix="/database", tags=["Database Management"])
