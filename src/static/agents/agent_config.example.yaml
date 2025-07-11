@@ -1,0 +1,120 @@
+# 智能体配置示例文件
+
+# 基础配置
+name: "研究助手"
+description: "专门用于深度研究的智能体助手"
+agent_type: "researcher"
+version: "1.0.0"
+
+# 用户和组织
+user_id: "user-uuid-here"
+organization_id: "org-uuid-here"
+
+# 能力配置
+capabilities:
+  - name: "information_research"
+    description: "信息研究能力"
+    required_permissions:
+      - "kb:read"
+      - "mcp_tool:search"
+    supported_knowledge_bases:
+      - "*"  # 支持所有知识库
+    supported_mcp_tools:
+      - "search"
+      - "crawler"
+      - "api"
+
+# 选中的知识库
+selected_knowledge_bases:
+  - "kb-001"
+  - "kb-002"
+
+# 选中的MCP工具
+selected_mcp_tools:
+  - "web_search"
+  - "document_analyzer"
+
+# LLM配置
+llm_config:
+  provider: "openai"
+  model: "gpt-4"
+  temperature: 0.7
+  max_tokens: 2000
+  timeout: 30
+  retry_attempts: 3
+
+# 提示词模板
+prompt_templates:
+  system:
+    name: "系统提示词"
+    template: |
+      你是一个专业的研究助手，具有以下能力：
+      - 信息收集和分析
+      - 多源数据整合
+      - 深度研究报告生成
+      
+      请遵循以下原则：
+      1. 准确性：确保信息的准确性和可靠性
+      2. 全面性：从多个角度分析问题
+      3. 结构化：以清晰的结构组织信息
+    variables:
+      - "user_name"
+      - "research_topic"
+  
+  research:
+    name: "研究任务提示词"
+    template: |
+      请对以下主题进行深度研究：{{ research_topic }}
+      
+      研究要求：
+      - 收集相关信息
+      - 分析关键观点
+      - 总结核心发现
+      
+      可用资源：
+      - 知识库：{{ knowledge_bases }}
+      - 工具：{{ mcp_tools }}
+    variables:
+      - "research_topic"
+      - "knowledge_bases"
+      - "mcp_tools"
+
+# 资源限制
+resource_limits:
+  max_knowledge_bases: 10
+  max_mcp_tools: 20
+  max_concurrent_tasks: 5
+  max_execution_time: 300  # 秒
+  max_memory_usage: 1024   # MB
+
+# 安全配置
+security_config:
+  enable_sandbox: true
+  allowed_domains:
+    - "*.example.com"
+    - "api.trusted-service.com"
+  blocked_domains:
+    - "malicious-site.com"
+  max_file_size: 10485760  # 10MB
+  allowed_file_types:
+    - ".txt"
+    - ".md" 
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+
+# 运行时配置
+auto_start: false
+enable_logging: true
+log_level: "INFO"
+
+# 标签和元数据
+tags:
+  - "research"
+  - "analysis"
+  - "production"
+
+metadata:
+  department: "研发部"
+  project: "AI研究项目"
+  version: "1.0.0"

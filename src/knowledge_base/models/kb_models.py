@@ -22,7 +22,7 @@ class KnowledgeDatabase(Base):
     created_at = Column(DateTime, default=func.now())  # 创建时间
     
     # 权限相关字段
-    owner_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)  # 知识库所有者
+    owner_id = Column(UUID(as_uuid=True), ForeignKey('users.user_id'), nullable=False)  # 知识库所有者
     is_public = Column(Boolean, default=False)  # 是否公开
     access_level = Column(String(20), default='private')  # private, shared, public
 
@@ -84,7 +84,7 @@ class KnowledgeFile(Base):
     last_processed_at = Column(DateTime, nullable=True)  # 最后处理时间
     
     # 权限相关字段
-    uploaded_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)  # 上传者
+    uploaded_by = Column(UUID(as_uuid=True), ForeignKey('users.user_id'), nullable=True)  # 上传者
 
     # 关系
     database = relationship("KnowledgeDatabase", back_populates="files")
@@ -227,9 +227,9 @@ class KnowledgeDatabasePermission(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     database_id = Column(String, ForeignKey('knowledge_databases.db_id', ondelete='CASCADE'), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False)
     permission_type = Column(String(20), nullable=False)  # read, write, admin
-    granted_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
+    granted_by = Column(UUID(as_uuid=True), ForeignKey('users.user_id'), nullable=True)
     granted_at = Column(DateTime, default=func.now())
     expires_at = Column(DateTime, nullable=True)
     

@@ -1,0 +1,131 @@
+# 协调器智能体配置
+
+name: "任务协调器"
+description: "负责任务分解、流程控制和智能体协调的核心智能体"
+agent_type: "coordinator"
+version: "1.0.0"
+
+# 能力配置
+capabilities:
+  - name: "task_coordination"
+    description: "任务协调和分解能力"
+    required_permissions:
+      - "agent:coordinate"
+      - "agent:create"
+      - "kb:read"
+      - "mcp_tool:use"
+    supported_knowledge_bases:
+      - "*"
+    supported_mcp_tools:
+      - "*"
+      
+  - name: "workflow_management"
+    description: "工作流管理能力"
+    required_permissions:
+      - "workflow:manage"
+      - "task:create"
+      - "task:assign"
+    supported_knowledge_bases: []
+    supported_mcp_tools:
+      - "task_manager"
+      - "notification"
+
+# LLM配置
+llm_config:
+  provider: "openai"
+  model: "gpt-4"
+  temperature: 0.3  # 较低的温度确保一致性
+  max_tokens: 4000
+  timeout: 60
+  retry_attempts: 3
+
+# 提示词模板
+prompt_templates:
+  system:
+    name: "协调器系统提示词"
+    template: |
+      你是一个智能体任务协调器，负责：
+      1. 分析用户需求，制定详细的执行计划
+      2. 将复杂任务分解为可执行的子任务
+      3. 分配任务给合适的智能体
+      4. 监控执行进度，协调智能体间的协作
+      5. 处理异常情况和冲突解决
+      
+      工作原则：
+      - 确保任务分解的合理性和可执行性
+      - 优化资源分配和执行效率
+      - 维护任务间的依赖关系
+      - 及时响应和处理异常
+    variables:
+      - "available_agents"
+      - "available_resources"
+  
+  planning:
+    name: "任务规划提示词"
+    template: |
+      请为以下研究主题制定详细的执行计划：
+      
+      研究主题：{{ research_topic }}
+      研究目标：{{ research_objective }}
+      
+      可用资源：
+      - 知识库：{{ knowledge_bases }}
+      - MCP工具：{{ mcp_tools }}
+      - 智能体类型：{{ available_agent_types }}
+      
+      请生成：
+      1. 任务分解结构
+      2. 执行顺序和依赖关系
+      3. 资源分配方案
+      4. 预期时间安排
+      5. 风险评估和应对措施
+    variables:
+      - "research_topic"
+      - "research_objective"
+      - "knowledge_bases"
+      - "mcp_tools"
+      - "available_agent_types"
+
+# 协调器特定配置
+coordination_config:
+  max_concurrent_agents: 5
+  task_timeout: 1800  # 30分钟
+  retry_failed_tasks: true
+  max_retry_attempts: 3
+  enable_auto_scaling: true
+  
+# 资源限制
+resource_limits:
+  max_knowledge_bases: 20
+  max_mcp_tools: 50
+  max_concurrent_tasks: 10
+  max_execution_time: 3600  # 1小时
+  max_memory_usage: 2048   # 2GB
+
+# 安全配置
+security_config:
+  enable_sandbox: true
+  allowed_domains: ["*"]  # 协调器可以访问所有域名
+  blocked_domains: []
+  max_file_size: 52428800  # 50MB
+  allowed_file_types:
+    - ".txt"
+    - ".md"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+    - ".json"
+    - ".yaml"
+    - ".csv"
+
+# 运行时配置
+auto_start: true
+enable_logging: true
+log_level: "INFO"
+
+# 标签
+tags:
+  - "coordinator"
+  - "workflow"
+  - "management"
+  - "core"

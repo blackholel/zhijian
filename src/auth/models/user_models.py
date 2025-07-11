@@ -10,7 +10,7 @@ class User(Base):
     """用户模型"""
     __tablename__ = 'users'
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 匹配现有数据库架构
     external_user_id = Column(String(255), unique=True, nullable=False, index=True)  # 外部用户ID
     username = Column(String(255), nullable=False, unique=True, index=True)
     display_name = Column(String(255), nullable=True)
@@ -28,6 +28,13 @@ class User(Base):
     operation_logs = relationship("OperationLog", back_populates="user")
     # 关联用户角色
     user_roles = relationship("UserRole", back_populates="user", foreign_keys="UserRole.user_id")
+    # 关联智能体定义
+    agent_definitions = relationship("AgentDefinition", back_populates="user")
+
+    @property
+    def id(self):
+        """为了兼容性，提供 id 属性作为 user_id 的别名"""
+        return self.user_id
 
     def to_dict(self, include_password=False):
         result = {
@@ -106,9 +113,9 @@ class UserRole(Base):
     __tablename__ = 'user_roles'
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False)
     role_id = Column(UUID(as_uuid=True), ForeignKey('roles.id', ondelete='CASCADE'), nullable=False)
-    granted_by = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
+    granted_by = Column(UUID(as_uuid=True), ForeignKey('users.user_id'), nullable=True)
     granted_at = Column(DateTime, default=func.now())
     expires_at = Column(DateTime, nullable=True)
 
@@ -154,7 +161,7 @@ class UserPermissionCache(Base):
     """用户权限缓存模型"""
     __tablename__ = 'user_permission_cache'
 
-    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.user_id', ondelete='CASCADE'), primary_key=True)
     permissions = Column(JSON, nullable=False)
     last_updated = Column(DateTime, default=func.now())
 
@@ -174,7 +181,7 @@ class OperationLog(Base):
     __tablename__ = 'operation_logs'
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.user_id'), nullable=False)
     operation = Column(String, nullable=False)
     details = Column(Text, nullable=True)
     ip_address = Column(String, nullable=True)

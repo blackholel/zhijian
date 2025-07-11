@@ -9,6 +9,7 @@ from src.utils.logging_config import logger
 
 # 导入所有模型以确保它们被注册到Base.metadata
 from src.auth.models.user_models import User, Role, Permission, UserRole, RolePermission, UserPermissionCache, OperationLog
+from src.auth.models.agent_models import AgentDefinition, AgentSession, AgentPermission, AgentTask
 from src.knowledge_base.models.kb_models import KnowledgeDatabase, KnowledgeFile, KnowledgeNode, KnowledgeDatabasePermission
 
 
