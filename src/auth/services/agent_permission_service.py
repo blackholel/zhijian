@@ -101,68 +101,67 @@ class AgentPermissionService:
     ) -> bool:
         """创建智能体权限"""
         try:
-            # 使用异步会话管理
-            async with self.db_manager.connection_manager.get_session('server_db') as session:
+            # 使用项目标准的execute_query方法
+            adapter = await self.db_manager.connection_manager.ensure_connection('server_db')
             
-                # 创建知识库权限
-                for kb_id in knowledge_bases:
-                    kb_query = text("""
-                        INSERT INTO agent_permissions (
-                            agent_definition_id, user_id, permission_type, resource_id,
-                            permission_level, permissions, is_active, created_at
-                        ) VALUES (
-                            :agent_id, :user_id, 'knowledge_base', :resource_id,
-                            'read', :permissions, true, NOW()
-                        )
-                    """)
-                    
-                    await session.execute(kb_query, {
-                        'agent_id': agent_definition_id,
-                        'user_id': user_id,
-                        'resource_id': kb_id,
-                        'permissions': '["kb:read", "kb:query"]'
-                    })
+            # 创建知识库权限
+            for kb_id in knowledge_bases:
+                kb_query = """
+                    INSERT INTO agent_permissions (
+                        agent_definition_id, user_id, permission_type, resource_id,
+                        permission_level, permissions, is_active, created_at
+                    ) VALUES (
+                        :agent_id, :user_id, 'knowledge_base', :resource_id,
+                        'read', :permissions, true, NOW()
+                    )
+                """
                 
-                # 创建MCP工具权限
-                for tool_name in mcp_tools:
-                    tool_query = text("""
-                        INSERT INTO agent_permissions (
-                            agent_definition_id, user_id, permission_type, resource_id,
-                            permission_level, permissions, is_active, created_at
-                        ) VALUES (
-                            :agent_id, :user_id, 'mcp_tool', :resource_id,
-                            'use', :permissions, true, NOW()
-                        )
-                    """)
-                    
-                    await session.execute(tool_query, {
-                        'agent_id': agent_definition_id,
-                        'user_id': user_id,
-                        'resource_id': tool_name,
-                        'permissions': f'["mcp_tool:use", "mcp_tool:{tool_name}"]'
-                    })
+                await adapter.execute_query(kb_query, {
+                    'agent_id': agent_definition_id,
+                    'user_id': user_id,
+                    'resource_id': kb_id,
+                    'permissions': '["kb:read", "kb:query"]'
+                })
+            
+            # 创建MCP工具权限
+            for tool_name in mcp_tools:
+                tool_query = """
+                    INSERT INTO agent_permissions (
+                        agent_definition_id, user_id, permission_type, resource_id,
+                        permission_level, permissions, is_active, created_at
+                    ) VALUES (
+                        :agent_id, :user_id, 'mcp_tool', :resource_id,
+                        'use', :permissions, true, NOW()
+                    )
+                """
                 
-                # 创建额外权限
-                if additional_permissions:
-                    system_query = text("""
-                        INSERT INTO agent_permissions (
-                            agent_definition_id, user_id, permission_type,
-                            permission_level, permissions, is_active, created_at
-                        ) VALUES (
-                            :agent_id, :user_id, 'system',
-                            'custom', :permissions, true, NOW()
-                        )
-                    """)
-                    
-                    await session.execute(system_query, {
-                        'agent_id': agent_definition_id,
-                        'user_id': user_id,
-                        'permissions': str(additional_permissions)
-                    })
+                await adapter.execute_query(tool_query, {
+                    'agent_id': agent_definition_id,
+                    'user_id': user_id,
+                    'resource_id': tool_name,
+                    'permissions': f'["mcp_tool:use", "mcp_tool:{tool_name}"]'
+                })
+            
+            # 创建额外权限
+            if additional_permissions:
+                system_query = """
+                    INSERT INTO agent_permissions (
+                        agent_definition_id, user_id, permission_type,
+                        permission_level, permissions, is_active, created_at
+                    ) VALUES (
+                        :agent_id, :user_id, 'system',
+                        'custom', :permissions, true, NOW()
+                    )
+                """
                 
-                await session.commit()
-                logger.info(f"智能体 {agent_definition_id} 权限创建成功")
-                return True
+                await adapter.execute_query(system_query, {
+                    'agent_id': agent_definition_id,
+                    'user_id': user_id,
+                    'permissions': str(additional_permissions)
+                })
+            
+            logger.info(f"智能体 {agent_definition_id} 权限创建成功")
+            return True
             
         except Exception as e:
             logger.error(f"创建智能体权限失败: {e}")
@@ -200,21 +199,19 @@ class AgentPermissionService:
     async def delete_agent_permissions(self, agent_definition_id: str) -> bool:
         """删除智能体权限"""
         try:
-            # 使用异步会话管理
-            async with self.db_manager.connection_manager.get_session('server_db') as session:
-                # 软删除：设置为不活跃
-                from sqlalchemy import text
-                query = text("""
-                    UPDATE agent_permissions 
-                    SET is_active = false 
-                    WHERE agent_definition_id = :agent_id
-                """)
-                
-                result = await session.execute(query, {'agent_id': agent_definition_id})
-                await session.commit()
-                
-                logger.info(f"智能体 {agent_definition_id} 权限删除成功")
-                return result.rowcount > 0
+            # 使用项目标准的execute_query方法
+            adapter = await self.db_manager.connection_manager.ensure_connection('server_db')
+            
+            query = """
+                UPDATE agent_permissions 
+                SET is_active = false 
+                WHERE agent_definition_id = :agent_id
+            """
+            
+            result = await adapter.execute_query(query, {'agent_id': agent_definition_id})
+            
+            logger.info(f"智能体 {agent_definition_id} 权限删除成功")
+            return True
             
         except Exception as e:
             logger.error(f"删除智能体权限失败: {e}")
@@ -363,33 +360,31 @@ class AgentPermissionService:
     ) -> bool:
         """授予临时权限"""
         try:
-            # 使用异步会话管理
-            async with self.db_manager.connection_manager.get_session('server_db') as session:
-                expires_at = datetime.now() + timedelta(hours=duration_hours)
-                
-                from sqlalchemy import text
-                query = text("""
-                    INSERT INTO agent_permissions (
-                        agent_definition_id, user_id, permission_type, resource_id,
-                        permission_level, expires_at, is_active, created_at
-                    ) VALUES (
-                        :agent_id, :user_id, :permission_type, :resource_id,
-                        'read', :expires_at, true, NOW()
-                    )
-                """)
-                
-                await session.execute(query, {
-                    'agent_id': agent_definition_id,
-                    'user_id': user_id,
-                    'permission_type': permission_type,
-                    'resource_id': resource_id,
-                    'expires_at': expires_at
-                })
-                
-                await session.commit()
-                
-                logger.info(f"临时权限授予成功: {permission_type}:{resource_id}, 过期时间: {expires_at}")
-                return True
+            # 使用项目标准的execute_query方法
+            adapter = await self.db_manager.connection_manager.ensure_connection('server_db')
+            
+            expires_at = datetime.now() + timedelta(hours=duration_hours)
+            
+            query = """
+                INSERT INTO agent_permissions (
+                    agent_definition_id, user_id, permission_type, resource_id,
+                    permission_level, expires_at, is_active, created_at
+                ) VALUES (
+                    :agent_id, :user_id, :permission_type, :resource_id,
+                    'read', :expires_at, true, NOW()
+                )
+            """
+            
+            await adapter.execute_query(query, {
+                'agent_id': agent_definition_id,
+                'user_id': user_id,
+                'permission_type': permission_type,
+                'resource_id': resource_id,
+                'expires_at': expires_at
+            })
+            
+            logger.info(f"临时权限授予成功: {permission_type}:{resource_id}, 过期时间: {expires_at}")
+            return True
             
         except Exception as e:
             logger.error(f"授予临时权限失败: {e}")
@@ -398,31 +393,29 @@ class AgentPermissionService:
     async def cleanup_expired_permissions(self) -> int:
         """清理过期权限"""
         try:
-            # 使用异步会话管理
-            async with self.db_manager.connection_manager.get_session('server_db') as session:
-                # 查询过期权限
-                from sqlalchemy import text
-                query = text("""
-                    SELECT * FROM agent_permissions 
+            # 使用项目标准的execute_query方法
+            adapter = await self.db_manager.connection_manager.ensure_connection('server_db')
+            
+            # 查询过期权限数量
+            count_query = """
+                SELECT COUNT(*) as count FROM agent_permissions 
+                WHERE expires_at <= NOW() AND is_active = true
+            """
+            result = await adapter.execute_query(count_query)
+            # execute_query返回的是行的列表，每行是tuple
+            count = result[0][0] if result and len(result) > 0 else 0
+            
+            if count > 0:
+                # 更新为不活跃状态
+                update_query = """
+                    UPDATE agent_permissions 
+                    SET is_active = false 
                     WHERE expires_at <= NOW() AND is_active = true
-                """)
-                result = await session.execute(query)
-                expired_permissions = result.fetchall()
-                
-                count = len(expired_permissions)
-                
-                if count > 0:
-                    # 更新为不活跃状态
-                    update_query = text("""
-                        UPDATE agent_permissions 
-                        SET is_active = false 
-                        WHERE expires_at <= NOW() AND is_active = true
-                    """)
-                    await session.execute(update_query)
-                    await session.commit()
-                
-                logger.info(f"清理了 {count} 个过期权限")
-                return count
+                """
+                await adapter.execute_query(update_query)
+            
+            logger.info(f"清理了 {count} 个过期权限")
+            return count
                 
         except Exception as e:
             logger.error(f"清理过期权限失败: {e}")
