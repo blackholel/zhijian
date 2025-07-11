@@ -135,6 +135,13 @@ class UnifiedDatabaseManager:
             self._repositories['file'] = FileRepository(self.connection_manager)
         return self._repositories['file']
     
+    def get_agent_repository(self):
+        """获取智能体仓储"""
+        if 'agent' not in self._repositories:
+            from .repositories.agent_repository import AgentRepository
+            self._repositories['agent'] = AgentRepository(self.connection_manager)
+        return self._repositories['agent']
+    
     # 兼容性方法（用于替换原有的数据库管理器）
     
     async def get_session(self, db_name: str = 'server_db'):
@@ -316,6 +323,12 @@ async def get_file_repository_dependency():
     """FastAPI依赖注入：获取文件仓储"""
     db_manager = await get_database_manager_dependency()
     return db_manager.get_file_repository()
+
+
+async def get_agent_repository_dependency():
+    """FastAPI依赖注入：获取智能体仓储"""
+    db_manager = await get_database_manager_dependency()
+    return db_manager.get_agent_repository()
 
 
 # 兼容性便捷方法

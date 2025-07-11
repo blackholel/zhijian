@@ -38,11 +38,17 @@ class AgentManager:
     def __init__(self):
         self.agents: Dict[str, BaseAgent] = {}
         self.agent_classes: Dict[AgentType, Type[BaseAgent]] = {}
-        self.permission_service = AgentPermissionService()
-        # TODO: 实现具体的仓储类，暂时移除
-        # self.agent_repo = BaseRepository(AgentDefinition)
-        # self.session_repo = BaseRepository(AgentSession)
-        self.agent_repo = None
+        
+        # 初始化数据库管理器
+        from src.database.manager import get_database_manager
+        self.db_manager = get_database_manager()
+        
+        # 初始化服务
+        self.permission_service = AgentPermissionService(self.db_manager)
+        self.user_repo = self.db_manager.get_user_repository()
+        self.agent_repo = self.db_manager.get_agent_repository()
+        
+        # TODO: 实现会话仓储类
         self.session_repo = None
         
         # 状态监控
@@ -177,7 +183,9 @@ class AgentManager:
     async def _save_agent_definition(self, config: AgentConfig):
         """保存智能体定义到数据库"""
         try:
-            agent_definition = AgentDefinition(
+            from src.database.repositories.agent_repository import AgentInfo
+            
+            agent_info = AgentInfo(
                 agent_id=config.agent_id,
                 name=config.name,
                 description=config.description,
@@ -189,7 +197,7 @@ class AgentManager:
                 is_active=True
             )
             
-            await self.agent_repo.create(agent_definition)
+            await self.agent_repo.create(agent_info)
             logger.info(f"智能体定义已保存: {config.agent_id}")
             
         except Exception as e:
@@ -200,16 +208,16 @@ class AgentManager:
         """创建智能体权限"""
         try:
             # 获取数据库中的智能体定义
-            agent_definition = await self.agent_repo.get_by_field(
+            agent_info = await self.agent_repo.get_by_field(
                 "agent_id", config.agent_id
             )
             
-            if not agent_definition:
+            if not agent_info:
                 raise AgentError("智能体定义未找到")
             
             # 创建权限
             success = await self.permission_service.create_agent_permissions(
-                str(agent_definition.id),
+                agent_info.agent_id,  # 使用agent_id而不是数据库ID
                 config.user_id,
                 config.selected_knowledge_bases,
                 config.selected_mcp_tools
@@ -297,21 +305,21 @@ class AgentManager:
     
     async def _update_agent_definition(self, config: AgentConfig):
         """更新智能体定义"""
-        agent_definition = await self.agent_repo.get_by_field("agent_id", config.agent_id)
-        if agent_definition:
-            agent_definition.name = config.name
-            agent_definition.description = config.description
-            agent_definition.config_data = config.dict()
-            agent_definition.updated_at = datetime.now()
+        agent_info = await self.agent_repo.get_by_field("agent_id", config.agent_id)
+        if agent_info:
+            agent_info.name = config.name
+            agent_info.description = config.description
+            agent_info.config_data = config.dict()
+            agent_info.updated_at = datetime.now()
             
-            await self.agent_repo.update(agent_definition)
+            await self.agent_repo.update(agent_info)
     
     async def _update_agent_permissions(self, config: AgentConfig):
         """更新智能体权限"""
-        agent_definition = await self.agent_repo.get_by_field("agent_id", config.agent_id)
-        if agent_definition:
+        agent_info = await self.agent_repo.get_by_field("agent_id", config.agent_id)
+        if agent_info:
             await self.permission_service.update_agent_permissions(
-                str(agent_definition.id),
+                agent_info.agent_id,  # 使用agent_id
                 {
                     "user_id": config.user_id,
                     "knowledge_bases": config.selected_knowledge_bases,
@@ -373,9 +381,9 @@ class AgentManager:
             await self._soft_delete_agent_definition(agent_id)
             
             # 删除权限
-            agent_definition = await self.agent_repo.get_by_field("agent_id", agent_id)
-            if agent_definition:
-                await self.permission_service.delete_agent_permissions(str(agent_definition.id))
+            agent_info = await self.agent_repo.get_by_field("agent_id", agent_id)
+            if agent_info:
+                await self.permission_service.delete_agent_permissions(agent_info.agent_id)
             
             logger.info(f"智能体移除成功: {agent_id}")
             return True
@@ -386,13 +394,8 @@ class AgentManager:
     
     async def _soft_delete_agent_definition(self, agent_id: str):
         """软删除智能体定义"""
-        agent_definition = await self.agent_repo.get_by_field("agent_id", agent_id)
-        if agent_definition:
-            agent_definition.is_deleted = True
-            agent_definition.is_active = False
-            agent_definition.updated_at = datetime.now()
-            
-            await self.agent_repo.update(agent_definition)
+        # 使用仓储的删除方法
+        await self.agent_repo.delete(agent_id)
     
     async def get_agent_status(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """获取智能体状态"""
@@ -470,20 +473,49 @@ class AgentManager:
     
     async def _monitoring_loop(self):
         """监控循环"""
+        logger.info("智能体监控循环已启动")
+        
         while not self._shutdown_event.is_set():
             try:
                 # 检查智能体健康状态
                 await self._health_check()
                 
                 # 清理过期权限
-                await self.permission_service.cleanup_expired_permissions()
+                try:
+                    cleaned_count = await self.permission_service.cleanup_expired_permissions()
+                    if cleaned_count > 0:
+                        logger.info(f"清理了 {cleaned_count} 个过期权限")
+                except Exception as perm_error:
+                    logger.error(f"清理过期权限失败: {perm_error}")
                 
                 # 等待下次检查
-                await asyncio.sleep(60)  # 每分钟检查一次
-                
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(), 
+                        timeout=60.0  # 每分钟检查一次
+                    )
+                    # 如果事件被设置，退出循环
+                    break
+                except asyncio.TimeoutError:
+                    # 超时正常，继续下一次检查
+                    continue
+                    
+            except asyncio.CancelledError:
+                logger.info("监控循环被取消")
+                break
             except Exception as e:
                 logger.error(f"监控循环错误: {e}")
-                await asyncio.sleep(10)  # 错误时短暂休眠
+                # 错误时等待更短的时间
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(), 
+                        timeout=10.0  # 错误时短暂休眠
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    continue
+        
+        logger.info("智能体监控循环已停止")
     
     async def _health_check(self):
         """健康检查"""
