@@ -312,3 +312,206 @@ class DatabaseConfigManager:
             })
         except:
             return {'enabled': True, 'interval': 60, 'timeout': 10}
+    
+    # === 智能体配置管理扩展 ===
+    
+    async def get_agent_config(self, agent_name: str) -> Dict[str, Any]:
+        """
+        获取智能体系统级配置
+        
+        Args:
+            agent_name: 智能体名称
+            
+        Returns:
+            Dict[str, Any]: 智能体配置字典
+        """
+        try:
+            from src.agents.dependencies import get_agent_dependencies
+            dependencies = get_agent_dependencies()
+            db_manager = await dependencies.db_manager
+            
+            # 通过统一数据库管理器获取智能体配置
+            pg_adapter = await db_manager.get_postgresql_adapter('server_db')
+            
+            query = """
+            SELECT config_data FROM agent_system_configs 
+            WHERE agent_name = %s AND is_active = TRUE
+            """
+            
+            async with pg_adapter.get_session() as session:
+                result = await session.execute(query, (agent_name,))
+                row = await result.fetchone()
+                
+                if row:
+                    return row[0] or {}
+                
+                # 返回默认配置
+                return self._get_default_agent_config(agent_name)
+                
+        except Exception as e:
+            logger.warning(f"获取智能体系统配置失败: {e}")
+            return self._get_default_agent_config(agent_name)
+    
+    async def get_user_agent_config(self, user_id: str, agent_name: str) -> Dict[str, Any]:
+        """
+        获取用户级智能体配置
+        
+        Args:
+            user_id: 用户ID
+            agent_name: 智能体名称
+            
+        Returns:
+            Dict[str, Any]: 用户智能体配置字典
+        """
+        try:
+            from src.agents.dependencies import get_agent_dependencies
+            dependencies = get_agent_dependencies()
+            db_manager = await dependencies.db_manager
+            
+            pg_adapter = await db_manager.get_postgresql_adapter('server_db')
+            
+            query = """
+            SELECT config_data FROM user_agent_configs 
+            WHERE user_id = %s AND agent_name = %s AND is_active = TRUE
+            """
+            
+            async with pg_adapter.get_session() as session:
+                result = await session.execute(query, (user_id, agent_name))
+                row = await result.fetchone()
+                
+                return row[0] if row else {}
+                
+        except Exception as e:
+            logger.warning(f"获取用户智能体配置失败: {e}")
+            return {}
+    
+    async def get_kb_agent_config(self, kb_id: str, agent_name: str) -> Dict[str, Any]:
+        """
+        获取知识库级智能体配置
+        
+        Args:
+            kb_id: 知识库ID
+            agent_name: 智能体名称
+            
+        Returns:
+            Dict[str, Any]: 知识库智能体配置字典
+        """
+        try:
+            from src.agents.dependencies import get_agent_dependencies
+            dependencies = get_agent_dependencies()
+            db_manager = await dependencies.db_manager
+            
+            pg_adapter = await db_manager.get_postgresql_adapter('server_db')
+            
+            query = """
+            SELECT config_data FROM kb_agent_configs 
+            WHERE kb_id = %s AND agent_name = %s AND is_active = TRUE
+            """
+            
+            async with pg_adapter.get_session() as session:
+                result = await session.execute(query, (kb_id, agent_name))
+                row = await result.fetchone()
+                
+                return row[0] if row else {}
+                
+        except Exception as e:
+            logger.warning(f"获取知识库智能体配置失败: {e}")
+            return {}
+    
+    def _get_default_agent_config(self, agent_name: str) -> Dict[str, Any]:
+        """
+        获取智能体默认配置
+        
+        Args:
+            agent_name: 智能体名称
+            
+        Returns:
+            Dict[str, Any]: 默认配置
+        """
+        default_configs = {
+            'chatbot': {
+                'model': 'openai/gpt-4',
+                'temperature': 0.7,
+                'max_tokens': 2000,
+                'system_prompt': '你是一个有用的AI助手。',
+                'tools': []
+            },
+            'react': {
+                'model': 'openai/gpt-4', 
+                'temperature': 0.3,
+                'max_tokens': 2000,
+                'system_prompt': '你是一个能够使用工具解决问题的AI助手。',
+                'tools': ['calculator', 'web_search']
+            }
+        }
+        
+        return default_configs.get(agent_name, {
+            'model': 'openai/gpt-4',
+            'temperature': 0.7,
+            'max_tokens': 2000,
+            'system_prompt': '你是一个有用的AI助手。'
+        })
+    
+    async def set_user_agent_config(self, 
+                                   user_id: str, 
+                                   agent_name: str, 
+                                   config_data: Dict[str, Any]) -> bool:
+        """
+        设置用户智能体配置
+        
+        Args:
+            user_id: 用户ID
+            agent_name: 智能体名称
+            config_data: 配置数据
+            
+        Returns:
+            bool: 设置是否成功
+        """
+        try:
+            from src.agents.dependencies import get_agent_dependencies
+            dependencies = get_agent_dependencies()
+            db_manager = await dependencies.db_manager
+            
+            pg_adapter = await db_manager.get_postgresql_adapter('server_db')
+            
+            query = """
+            INSERT INTO user_agent_configs (user_id, agent_name, config_data, is_active, created_at, updated_at)
+            VALUES (%s, %s, %s, TRUE, NOW(), NOW())
+            ON CONFLICT (user_id, agent_name) 
+            DO UPDATE SET config_data = EXCLUDED.config_data, updated_at = NOW()
+            """
+            
+            async with pg_adapter.get_session() as session:
+                await session.execute(query, (user_id, agent_name, config_data))
+                await session.commit()
+                
+                logger.info(f"用户智能体配置已保存: {user_id} - {agent_name}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"保存用户智能体配置失败: {e}")
+            return False
+    
+    async def get_all_configs(self) -> Dict[str, Any]:
+        """
+        获取所有配置信息
+        
+        Returns:
+            Dict[str, Any]: 包含数据库配置和智能体配置的完整配置字典
+        """
+        all_config = {
+            'database': self._config or {},
+            'environment': self.environment,
+            'agents': {}
+        }
+        
+        # 添加智能体默认配置
+        try:
+            all_config['agents'] = {
+                'chatbot': self._get_default_agent_config('chatbot'),
+                'react': self._get_default_agent_config('react')
+            }
+        except Exception as e:
+            logger.warning(f"获取智能体配置失败: {e}")
+        
+        return all_config
