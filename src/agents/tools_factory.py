@@ -157,14 +157,19 @@ class PermissionAwareToolsFactory:
         Returns:
             Dict[str, Any]: 用户可用工具字典
         """
-        # 构建缓存键
-        cache_key = f"user_tools:{user_context.user_id}:{user_context.kb_id or 'all'}"
+        import time
+        start_time = time.time()
+        
+        # 构建缓存键 - 包含权限哈希以确保权限变更时缓存失效
+        permissions_hash = hash(str(sorted(user_context.permissions))) if user_context.permissions else 0
+        cache_key = f"user_tools:{user_context.user_id}:{user_context.kb_id or 'all'}:{permissions_hash}"
         
         # 1. 缓存检查
         if cache_key in self._cache:
             cached_tools, timestamp = self._cache[cache_key]
             if asyncio.get_event_loop().time() - timestamp < self._cache_ttl:
-                logger.debug(f"从缓存获取用户工具: {user_context.user_id}")
+                duration = (time.time() - start_time) * 1000
+                logger.debug(f"从缓存获取用户工具: {user_context.user_id} (耗时: {duration:.2f}ms)")
                 return cached_tools
         
         tools = {}
@@ -184,7 +189,13 @@ class PermissionAwareToolsFactory:
             # 4. 缓存结果
             self._cache[cache_key] = (tools, asyncio.get_event_loop().time())
             
-            logger.info(f"用户 {user_context.user_id} 可用工具: {list(tools.keys())}")
+            # 5. 性能监控和日志
+            duration = (time.time() - start_time) * 1000
+            logger.info(f"用户 {user_context.user_id} 可用工具: {list(tools.keys())} (耗时: {duration:.2f}ms, 缓存键: {cache_key[:50]}...)")
+            
+            # 6. 异步清理过期缓存
+            asyncio.create_task(self._cleanup_expired_cache())
+            
             return tools
             
         except Exception as e:
@@ -229,6 +240,23 @@ class PermissionAwareToolsFactory:
             logger.error(f"获取基础工具失败: {e}")
             return {}
     
+    async def _cleanup_expired_cache(self):
+        """异步清理过期缓存"""
+        try:
+            current_time = asyncio.get_event_loop().time()
+            expired_keys = [
+                key for key, (_, timestamp) in self._cache.items()
+                if current_time - timestamp > self._cache_ttl
+            ]
+            
+            for key in expired_keys:
+                del self._cache[key]
+            
+            if expired_keys:
+                logger.debug(f"清理了 {len(expired_keys)} 个过期工具缓存项")
+        except Exception as e:
+            logger.warning(f"缓存清理失败: {e}")
+    
     async def _get_kb_tools(self, user_context: 'UserContext') -> Dict[str, Any]:
         """
         获取知识库工具 - 动态生成
@@ -243,16 +271,27 @@ class PermissionAwareToolsFactory:
         
         try:
             # 获取用户有权限的知识库
+            logger.debug(f"获取用户 {user_context.user_id} 的知识库工具...")
             accessible_kbs = await self.kb_manager.get_user_accessible_kbs(user_context.user_id)
+            logger.debug(f"获取到 {len(accessible_kbs) if accessible_kbs else 0} 个知识库")
             
             for kb in accessible_kbs:
+                # 安全获取知识库属性
+                kb_id = getattr(kb, 'db_id', None) if hasattr(kb, 'db_id') else None
+                kb_name = getattr(kb, 'name', 'Unknown') if hasattr(kb, 'name') else 'Unknown'
+                kb_description = getattr(kb, 'description', None) if hasattr(kb, 'description') else None
+                
+                if not kb_id:
+                    logger.warning(f"知识库对象缺少db_id属性: {type(kb)}")
+                    continue
+                
                 # 检查特定知识库的读取权限
-                if await self._check_kb_permission(user_context, kb.db_id, "read"):
-                    tool_name = f"retrieve_{kb.db_id[:8]}"
-                    description = f"检索 {kb.name} 知识库内容\n知识库描述: {kb.description or '无描述'}"
+                if await self._check_kb_permission(user_context, kb_id, "read"):
+                    tool_name = f"retrieve_{kb_id[:8]}"
+                    description = f"检索 {kb_name} 知识库内容\n知识库描述: {kb_description or '无描述'}"
                     
                     # 创建异步检索函数
-                    async def kb_retriever(query_text: str, kb_id=kb.db_id):
+                    async def kb_retriever(query_text: str, kb_id=kb_id):
                         try:
                             return await self.kb_manager.query_knowledge_base(
                                 kb_id, query_text, user_context.user_id
@@ -307,7 +346,7 @@ class PermissionAwareToolsFactory:
             
             # 通过权限引擎进行详细检查
             from server.auth.permission_framework.resources import ToolResource
-            from server.auth.permission_framework.models import Permission
+            from server.auth.permission_framework.core import Permission
             
             return await self.permission_engine.check_permission_simple(
                 user_id=user_context.user_id,

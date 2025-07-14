@@ -251,12 +251,20 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
     
     async def get_user_accessible_kbs(self, user_id: str) -> List[KnowledgeDatabase]:
         """获取用户可访问的知识库列表"""
+        logger.debug(f"查询用户 {user_id} 可访问的知识库（缓存: {getattr(self, '_cache_enabled', False)}）")
+        
         try:
-            # 尝试从缓存获取
-            cache_key = f"user_kbs:{user_id}"
-            cached_kbs = await self._get_from_cache(cache_key)
-            if cached_kbs:
-                return cached_kbs
+            # 尝试从缓存获取（如果缓存启用）
+            cached_kbs = None
+            if getattr(self, '_cache_enabled', False):
+                cache_key = f"user_kbs:{user_id}"
+                try:
+                    cached_kbs = await self._get_from_cache(cache_key)
+                    if cached_kbs:
+                        logger.debug(f"从缓存获取到 {len(cached_kbs)} 个知识库")
+                        return cached_kbs
+                except Exception as cache_e:
+                    logger.warning(f"缓存访问失败: {cache_e}")
             
             async with await self.get_session() as session:
                 # 查询用户拥有的知识库
@@ -296,12 +304,22 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
                 
                 result = list(all_kbs.values())
                 
+                logger.debug(f"数据库查询完成: 拥有({len(owned_kbs)}) + 共享({len(shared_kbs)}) + 公开({len(public_kbs)}) = 总计{len(result)}个知识库")
+                
                 # 从Session中分离对象，使其独立于Session
                 for kb in result:
                     session.expunge(kb)
                 
-                # 缓存结果
-                await self._set_to_cache(cache_key, result, ttl=1800)  # 30分钟缓存
+                logger.debug(f"知识库对象已从Session分离")
+                
+                # 缓存结果（如果缓存启用）
+                if getattr(self, '_cache_enabled', False):
+                    try:
+                        cache_key = f"user_kbs:{user_id}"
+                        await self._set_to_cache(cache_key, result, ttl=1800)  # 30分钟缓存
+                        logger.debug(f"知识库列表已缓存")
+                    except Exception as cache_e:
+                        logger.warning(f"缓存设置失败: {cache_e}")
                 
                 return result
                 

@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Dict, Any, List, Optional
+from typing import TYPE_CHECKING, Dict, Any, List, Optional, Union, AsyncIterator
 from src.agents.chatbot import ChatbotAgent
 from src.agents.react import ReActAgent
 from src.utils import logger
@@ -162,7 +162,8 @@ class AgentManager:
                            messages: List, 
                            user_context: 'UserContext',
                            config: Optional['RunnableConfig'] = None,
-                           stream_mode: str = "messages") -> Any:
+                           stream_mode: str = "messages",
+                           stream: bool = True) -> Union[AsyncIterator[Any], Any]:
         """
         执行智能体 - 需要用户上下文和权限检查
         
@@ -191,15 +192,37 @@ class AgentManager:
             from langchain_core.runnables import RunnableConfig
             config = RunnableConfig(configurable={})
         
+        # 确保配置对象有configurable字段
+        if "configurable" not in config:
+            config["configurable"] = {}
+            
         # 确保配置中包含用户上下文
         config["configurable"]["user_context"] = user_context
         
         # 执行智能体
         try:
-            if stream_mode == "values":
-                return agent.stream_values(messages, config, user_context)
+            if stream:
+                # 流式执行
+                if stream_mode == "values":
+                    return agent.stream_values(messages, config, user_context)
+                else:
+                    return agent.stream_messages(messages, config, user_context)
             else:
-                return agent.stream_messages(messages, config, user_context)
+                # 非流式执行 - 收集完整结果
+                result_messages = []
+                if stream_mode == "values":
+                    async for chunk in agent.stream_values(messages, config, user_context):
+                        result_messages.append(chunk)
+                else:
+                    async for chunk in agent.stream_messages(messages, config, user_context):
+                        result_messages.append(chunk)
+                
+                # 返回最后一个消息或所有消息
+                if result_messages:
+                    return result_messages[-1] if len(result_messages) == 1 else result_messages
+                else:
+                    return {"error": "No response generated"}
+                    
         except Exception as e:
             logger.error(f"智能体执行失败 {agent_name}: {e}")
             raise
@@ -234,12 +257,20 @@ class AgentManager:
             permission_engine = await self._dependencies.permission_engine
             
             from server.auth.permission_framework.resources import AgentResource
-            from server.auth.permission_framework.models import Permission
+            from server.auth.permission_framework.core import Permission
+            
+            # 验证权限是否为有效枚举值
+            try:
+                perm_enum = Permission(permission)
+            except ValueError:
+                logger.warning(f"无效权限类型: {permission}, 使用默认检查")
+                # 对于非标准权限，依赖前面的字符串匹配检查
+                return False
             
             return await permission_engine.check_permission_simple(
                 user_id=user_context.user_id,
                 resource=AgentResource(agent_name),
-                permission=Permission(permission)
+                permission=perm_enum
             )
             
         except Exception as e:

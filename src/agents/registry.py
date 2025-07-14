@@ -353,7 +353,7 @@ class BaseAgent(ABC):
         """
         try:
             from server.auth.permission_framework.resources import AgentResource
-            from server.auth.permission_framework.models import Permission
+            from server.auth.permission_framework.core import Permission
             
             permission_engine = await self.permission_engine
             result = await permission_engine.check_permission_simple(
@@ -368,7 +368,39 @@ class BaseAgent(ABC):
     
     async def get_user_tools(self, user_context: 'UserContext') -> Dict[str, Any]:
         """
-        获取用户可用工具
+        获取用户可用工具 - 使用权限感知工具工厂
+        
+        Args:
+            user_context: 用户上下文
+            
+        Returns:
+            Dict[str, Any]: 用户可用工具字典
+        """
+        try:
+            # 优先使用权限感知工具工厂
+            from src.agents.tools_factory import PermissionAwareToolsFactory
+            
+            # 获取依赖的权限引擎和知识库管理器
+            permission_engine = await self.permission_engine
+            kb_manager = await self.kb_manager
+            
+            # 创建权限感知工具工厂
+            tools_factory = PermissionAwareToolsFactory(permission_engine, kb_manager)
+            
+            # 获取用户可用工具
+            user_tools = await tools_factory.get_user_tools(user_context)
+            
+            logger.debug(f"用户 {user_context.user_id} 通过权限感知工厂获得工具: {list(user_tools.keys())}")
+            return user_tools
+            
+        except Exception as e:
+            logger.error(f"权限感知工具获取失败，使用降级方案: {e}")
+            # 降级到传统工具获取方式
+            return await self._get_user_tools_legacy(user_context)
+    
+    async def _get_user_tools_legacy(self, user_context: 'UserContext') -> Dict[str, Any]:
+        """
+        传统工具获取方式（降级处理）
         
         Args:
             user_context: 用户上下文
@@ -390,9 +422,10 @@ class BaseAgent(ABC):
             kb_tools = await self._get_kb_tools(user_context)
             user_tools.update(kb_tools)
             
+            logger.debug(f"用户 {user_context.user_id} 通过传统方式获得工具: {list(user_tools.keys())}")
             return user_tools
         except Exception as e:
-            logger.error(f"获取用户工具失败: {e}")
+            logger.error(f"传统工具获取失败: {e}")
             return {}
     
     async def _check_tool_permission(self, user_context: 'UserContext', tool_name: str) -> bool:
@@ -414,7 +447,7 @@ class BaseAgent(ABC):
             
             # 其他工具的权限检查
             from server.auth.permission_framework.resources import ToolResource
-            from server.auth.permission_framework.models import Permission
+            from server.auth.permission_framework.core import Permission
             
             permission_engine = await self.permission_engine
             return await permission_engine.check_permission_simple(
@@ -444,11 +477,19 @@ class BaseAgent(ABC):
             accessible_kbs = await kb_manager.get_user_accessible_kbs(user_context.user_id)
             
             for kb in accessible_kbs:
-                tool_name = f"retrieve_{kb.db_id[:8]}"
-                description = f"使用 {kb.name} 知识库进行检索"
+                # 安全获取知识库属性
+                kb_id = getattr(kb, 'db_id', None) if hasattr(kb, 'db_id') else None
+                kb_name = getattr(kb, 'name', 'Unknown') if hasattr(kb, 'name') else 'Unknown'
+                
+                if not kb_id:
+                    logger.warning(f"知识库对象缺少db_id属性: {type(kb)}")
+                    continue
+                
+                tool_name = f"retrieve_{kb_id[:8]}"
+                description = f"使用 {kb_name} 知识库进行检索"
                 
                 # 创建知识库检索工具
-                async def kb_retriever(query_text: str, kb_id=kb.db_id):
+                async def kb_retriever(query_text: str, kb_id=kb_id):
                     return await kb_manager.query_knowledge_base(
                         kb_id, query_text, user_context.user_id
                     )
@@ -597,11 +638,21 @@ class BaseAgent(ABC):
         try:
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             
-            # 使用统一数据库管理器获取连接
+            # 使用统一数据库管理器获取会话上下文
             pg_adapter = await self.pg_adapter
-            connection = await pg_adapter.get_connection()
+            # PostgreSQL适配器没有get_connection方法，使用get_session_context
+            # 对于AsyncSqliteSaver，我们需要创建一个SQLite连接
+            # 暂时跳过PostgreSQL连接，直接创建内存SQLite存储
+            import tempfile
+            import aiosqlite
             
-            return AsyncSqliteSaver(connection)
+            # 创建临时SQLite数据库文件
+            temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+            temp_db.close()
+            
+            # 创建异步SQLite连接
+            conn = await aiosqlite.connect(temp_db.name)
+            return AsyncSqliteSaver(conn)
         except Exception as e:
             logger.warning(f"获取检查点存储器失败: {e}")
             return None

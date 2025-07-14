@@ -409,7 +409,10 @@ class KnowledgeBaseManager:
     async def get_user_knowledge_bases(self, user_id: str) -> List[KnowledgeDatabase]:
         """获取用户可访问的知识库列表"""
         try:
-            return await self.kb_repo.get_user_accessible_kbs(user_id)
+            logger.debug(f"查询用户 {user_id} 的知识库列表")
+            result = await self.kb_repo.get_user_accessible_kbs(user_id)
+            logger.debug(f"仓储层返回 {len(result) if result else 0} 个知识库")
+            return result
         except Exception as e:
             logger.error(f"获取用户知识库列表失败: {e}")
             return []

@@ -154,7 +154,7 @@ class DatabaseConnectionManager:
             数据库会话对象
         """
         adapter = await self.ensure_connection(db_name)
-        async with adapter.get_session() as session:
+        async with adapter.get_session_context() as session:
             yield session
     
     async def close_database(self, db_name: str) -> bool:

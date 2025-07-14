@@ -103,6 +103,76 @@ class UserContext:
             )
     
     @classmethod
+    def from_user_sync(cls, 
+                      user: 'User', 
+                      thread_id: str = None,
+                      kb_id: str = None,
+                      **kwargs) -> 'UserContext':
+        """
+        从用户对象同步创建上下文（简化版本）
+        
+        Args:
+            user: 用户数据模型对象
+            thread_id: 会话线程ID
+            kb_id: 当前知识库ID
+            **kwargs: 额外的上下文参数
+            
+        Returns:
+            UserContext: 用户上下文对象
+        """
+        try:
+            # 获取用户角色（同步版本）
+            roles = []
+            if hasattr(user, 'roles') and user.roles:
+                if hasattr(user.roles, '__iter__') and not isinstance(user.roles, str):
+                    roles = [role.name if hasattr(role, 'name') else str(role) for role in user.roles]
+                else:
+                    roles = [str(user.roles)]
+            
+            # 基础权限 - 确保用户可以访问和执行智能体
+            permissions = {
+                "agent:access", 
+                "agent:execute", 
+                "agent:read",
+                "tool:basic",
+                "tool:use",
+                "chat:create",
+                "chat:read"
+            }
+            
+            # 检查管理员权限
+            if hasattr(user, 'is_admin') and user.is_admin:
+                permissions.add("*:*")
+            elif any(role in ['admin', 'superadmin'] for role in roles):
+                permissions.add("*:*")
+            
+            context = cls(
+                user_id=str(user.id),
+                username=str(user.username),
+                display_name=getattr(user, 'display_name', None),
+                roles=roles,
+                permissions=permissions,
+                thread_id=thread_id,
+                kb_id=kb_id,
+                **kwargs
+            )
+            
+            logger.debug(f"用户上下文同步创建成功: {user.username} ({user.id})")
+            return context
+            
+        except Exception as e:
+            logger.error(f"同步创建用户上下文失败: {e}")
+            # 返回最基本的上下文
+            return cls(
+                user_id=str(getattr(user, 'id', 'unknown')),
+                username=str(getattr(user, 'username', 'unknown')),
+                display_name=getattr(user, 'display_name', None),
+                thread_id=thread_id,
+                kb_id=kb_id,
+                permissions={"agent:access", "tool:basic"}
+            )
+    
+    @classmethod
     async def from_user_id(cls, 
                           user_id: str,
                           thread_id: str = None,

@@ -98,3 +98,69 @@ class Resource(ABC):
     
     def __eq__(self, other):
         return isinstance(other, Resource) and self.uri == other.uri
+
+
+class AgentResource(Resource):
+    """智能体资源类"""
+    
+    def __init__(self, agent_name: str, metadata: Optional[Dict[str, Any]] = None):
+        from .core import ResourceType, ResourceIdentifier
+        identifier = ResourceIdentifier(
+            resource_type=ResourceType.AGENT,
+            resource_id=agent_name,
+            namespace=None
+        )
+        super().__init__(identifier, metadata)
+        self.agent_name = agent_name
+    
+    async def get_owner(self) -> Optional[str]:
+        """智能体通常没有特定所有者，由系统管理"""
+        return None
+    
+    async def get_resource_attributes(self) -> Dict[str, Any]:
+        """获取智能体资源属性"""
+        return {
+            "agent_name": self.agent_name,
+            "resource_type": "agent",
+            "public": await self.is_public(),
+            **self.metadata
+        }
+    
+    async def is_public(self) -> bool:
+        """检查智能体是否公开可用"""
+        # 基础智能体默认公开，特殊智能体可能需要权限
+        public_agents = {"chatbot", "ReAct", "calculator", "basic"}
+        return self.agent_name in public_agents
+
+
+class ToolResource(Resource):
+    """工具资源类"""
+    
+    def __init__(self, tool_name: str, metadata: Optional[Dict[str, Any]] = None):
+        from .core import ResourceType, ResourceIdentifier
+        identifier = ResourceIdentifier(
+            resource_type=ResourceType.TOOL,
+            resource_id=tool_name,
+            namespace=None
+        )
+        super().__init__(identifier, metadata)
+        self.tool_name = tool_name
+    
+    async def get_owner(self) -> Optional[str]:
+        """工具通常没有特定所有者，由系统管理"""
+        return None
+    
+    async def get_resource_attributes(self) -> Dict[str, Any]:
+        """获取工具资源属性"""
+        return {
+            "tool_name": self.tool_name,
+            "resource_type": "tool",
+            "public": await self.is_public(),
+            **self.metadata
+        }
+    
+    async def is_public(self) -> bool:
+        """检查工具是否公开可用"""
+        # 基础工具默认公开
+        public_tools = {"calculator", "query_knowledge_graph", "Calculator", "QueryKnowledgeGraph"}
+        return self.tool_name in public_tools

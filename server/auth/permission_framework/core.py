@@ -20,6 +20,8 @@ class ResourceType(Enum):
     API_ENDPOINT = "api_endpoint"
     USER_PROFILE = "user_profile"
     SYSTEM_CONFIG = "system_config"
+    AGENT = "agent"  # 智能体资源
+    TOOL = "tool"    # 工具资源
 
 class Permission(Enum):
     """通用权限枚举"""
@@ -31,6 +33,8 @@ class Permission(Enum):
     SHARE = "share"
     CREATE = "create"
     UPDATE = "update"
+    ACCESS = "access"  # 智能体访问权限
+    USE = "use"        # 工具使用权限
 
 @dataclass
 class ResourceIdentifier:
