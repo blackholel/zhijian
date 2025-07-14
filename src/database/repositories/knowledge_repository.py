@@ -249,6 +249,49 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
             logger.error(f"查找所有知识库失败: {e}")
             return []
     
+    def _kb_to_dict(self, kb: KnowledgeDatabase) -> Dict[str, Any]:
+        """将知识库对象转换为字典，用于安全的缓存序列化"""
+        return {
+            'db_id': kb.db_id,
+            'name': kb.name,
+            'description': kb.description,
+            'embed_model': kb.embed_model,
+            'dimension': kb.dimension,
+            'meta_info': kb.meta_info,
+            'owner_id': str(kb.owner_id),
+            'is_public': kb.is_public,
+            'access_level': kb.access_level,
+            'created_at': getattr(kb, 'created_at', None).isoformat() if getattr(kb, 'created_at', None) else None,
+            'updated_at': getattr(kb, 'updated_at', None).isoformat() if getattr(kb, 'updated_at', None) else None
+        }
+    
+    def _dict_to_kb(self, kb_dict: Dict[str, Any]) -> KnowledgeDatabase:
+        """将字典转换为知识库对象"""
+        from datetime import datetime as dt
+        
+        kb = KnowledgeDatabase()
+        kb.db_id = kb_dict['db_id']
+        kb.name = kb_dict['name']
+        kb.description = kb_dict.get('description')
+        kb.embed_model = kb_dict.get('embed_model')
+        kb.dimension = kb_dict.get('dimension')
+        kb.meta_info = kb_dict.get('meta_info', {})
+        kb.owner_id = kb_dict['owner_id']
+        kb.is_public = kb_dict.get('is_public', False)
+        kb.access_level = kb_dict.get('access_level', 'private')
+        
+        # 处理日期时间字段
+        if kb_dict.get('created_at'):
+            kb.created_at = dt.fromisoformat(kb_dict['created_at'])
+        if kb_dict.get('updated_at'):
+            kb.updated_at = dt.fromisoformat(kb_dict['updated_at'])
+        
+        # 设置空的关系属性，避免lazily loading
+        kb.files = []
+        kb.permissions = []
+        
+        return kb
+
     async def get_user_accessible_kbs(self, user_id: str) -> List[KnowledgeDatabase]:
         """获取用户可访问的知识库列表"""
         logger.debug(f"查询用户 {user_id} 可访问的知识库（缓存: {getattr(self, '_cache_enabled', False)}）")
@@ -259,12 +302,34 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
             if getattr(self, '_cache_enabled', False):
                 cache_key = f"user_kbs:{user_id}"
                 try:
-                    cached_kbs = await self._get_from_cache(cache_key)
-                    if cached_kbs:
-                        logger.debug(f"从缓存获取到 {len(cached_kbs)} 个知识库")
-                        return cached_kbs
+                    cached_data = await self._get_from_cache(cache_key)
+                    if cached_data:
+                        # 验证缓存数据类型并安全转换
+                        if isinstance(cached_data, list):
+                            if all(isinstance(item, dict) for item in cached_data):
+                                # 缓存存储的是字典列表，转换为对象
+                                cached_kbs = [self._dict_to_kb(kb_dict) for kb_dict in cached_data]
+                                logger.debug(f"从缓存获取到 {len(cached_kbs)} 个知识库（字典格式）")
+                                return cached_kbs
+                            elif all(hasattr(item, 'db_id') for item in cached_data):
+                                # 缓存存储的是对象，直接返回
+                                logger.debug(f"从缓存获取到 {len(cached_data)} 个知识库（对象格式）")
+                                return cached_data
+                            else:
+                                # 缓存数据格式异常，清除缓存
+                                logger.warning(f"缓存数据格式异常，清除缓存: {type(cached_data[0]) if cached_data else 'empty'}")
+                                await self._delete_from_cache(cache_key)
+                        else:
+                            # 缓存数据类型错误，清除缓存
+                            logger.warning(f"缓存数据类型错误，清除缓存: {type(cached_data)}")
+                            await self._delete_from_cache(cache_key)
                 except Exception as cache_e:
                     logger.warning(f"缓存访问失败: {cache_e}")
+                    # 清除可能损坏的缓存
+                    try:
+                        await self._delete_from_cache(cache_key)
+                    except:
+                        pass
             
             async with await self.get_session() as session:
                 # 查询用户拥有的知识库
@@ -312,12 +377,14 @@ class KnowledgeRepository(PostgreSQLRepository[KnowledgeDatabase]):
                 
                 logger.debug(f"知识库对象已从Session分离")
                 
-                # 缓存结果（如果缓存启用）
+                # 安全缓存结果（如果缓存启用）
                 if getattr(self, '_cache_enabled', False):
                     try:
                         cache_key = f"user_kbs:{user_id}"
-                        await self._set_to_cache(cache_key, result, ttl=1800)  # 30分钟缓存
-                        logger.debug(f"知识库列表已缓存")
+                        # 将对象转换为字典进行缓存，避免pickle序列化问题
+                        cache_data = [self._kb_to_dict(kb) for kb in result]
+                        await self._set_to_cache(cache_key, cache_data, ttl=1800)  # 30分钟缓存
+                        logger.debug(f"知识库列表已安全缓存（字典格式）")
                     except Exception as cache_e:
                         logger.warning(f"缓存设置失败: {cache_e}")
                 

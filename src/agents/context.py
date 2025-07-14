@@ -232,7 +232,19 @@ class UserContext:
             kb_manager = await dependencies.kb_manager
             
             accessible_kbs = await kb_manager.get_user_accessible_kbs(user_id)
-            return [kb.db_id for kb in accessible_kbs]
+            
+            # 防御性处理，确保对象有db_id属性
+            kb_ids = []
+            for kb in accessible_kbs:
+                if isinstance(kb, str):
+                    # 如果是字符串，可能就是kb_id本身
+                    kb_ids.append(kb)
+                elif hasattr(kb, 'db_id'):
+                    kb_ids.append(kb.db_id)
+                else:
+                    logger.warning(f"无法获取知识库ID，对象类型: {type(kb)}")
+                    
+            return kb_ids
         except Exception as e:
             logger.warning(f"获取用户可访问知识库失败: {e}")
             return []

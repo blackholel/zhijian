@@ -276,13 +276,27 @@ class PermissionAwareToolsFactory:
             logger.debug(f"获取到 {len(accessible_kbs) if accessible_kbs else 0} 个知识库")
             
             for kb in accessible_kbs:
-                # 安全获取知识库属性
-                kb_id = getattr(kb, 'db_id', None) if hasattr(kb, 'db_id') else None
-                kb_name = getattr(kb, 'name', 'Unknown') if hasattr(kb, 'name') else 'Unknown'
-                kb_description = getattr(kb, 'description', None) if hasattr(kb, 'description') else None
+                # 防御性类型检查和属性提取
+                if isinstance(kb, str):
+                    # 如果返回的是字符串而不是对象，记录警告并跳过
+                    logger.warning(f"知识库对象是字符串类型，跳过: {kb}")
+                    continue
+                elif not hasattr(kb, 'db_id'):
+                    logger.warning(f"知识库对象缺少db_id属性: {type(kb)} - {kb}")
+                    continue
                 
-                if not kb_id:
-                    logger.warning(f"知识库对象缺少db_id属性: {type(kb)}")
+                # 安全获取知识库属性
+                try:
+                    kb_id = getattr(kb, 'db_id', None)
+                    kb_name = getattr(kb, 'name', 'Unknown')
+                    kb_description = getattr(kb, 'description', None)
+                    
+                    if not kb_id:
+                        logger.warning(f"知识库对象db_id为空: {type(kb)}")
+                        continue
+                        
+                except Exception as attr_e:
+                    logger.error(f"获取知识库属性失败: {attr_e}, 对象类型: {type(kb)}")
                     continue
                 
                 # 检查特定知识库的读取权限
