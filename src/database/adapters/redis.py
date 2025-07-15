@@ -265,9 +265,13 @@ class RedisAdapter(CacheAdapter):
                 return pickle.loads(value)
             except:
                 try:
-                    return json.loads(value.decode())
+                    return json.loads(value.decode('utf-8', errors='replace'))
                 except:
-                    return value.decode()
+                    try:
+                        return value.decode('utf-8', errors='replace')
+                    except Exception as e:
+                        logger.warning(f"Failed to decode bytes value: {e}")
+                        return None
         elif isinstance(value, str):
             try:
                 return json.loads(value)
@@ -292,6 +296,13 @@ class RedisAdapter(CacheAdapter):
             
         except Exception as e:
             logger.error(f"Get operation failed for key {key}: {e}")
+            # 如果是UTF-8解码错误，尝试删除损坏的缓存键
+            if "utf-8" in str(e).lower() or "decode" in str(e).lower():
+                try:
+                    await self.delete(key)
+                    logger.warning(f"Deleted corrupted cache key: {key}")
+                except:
+                    pass
             return None
     
     async def set(self, key: str, value: Any, ttl: int = None) -> bool:
