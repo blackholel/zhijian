@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse, quote_plus
+from sqlalchemy import text
 
 from .base import ConfigurationError
 
@@ -338,9 +339,9 @@ class DatabaseConfigManager:
             WHERE agent_name = %s AND is_active = TRUE
             """
             
-            async with pg_adapter.get_session() as session:
-                result = await session.execute(query, (agent_name,))
-                row = await result.fetchone()
+            async with pg_adapter.get_session_context() as session:
+                result = session.execute(text(query), (agent_name,))
+                row = result.fetchone()
                 
                 if row:
                     return row[0] or {}
@@ -375,9 +376,9 @@ class DatabaseConfigManager:
             WHERE user_id = %s AND agent_name = %s AND is_active = TRUE
             """
             
-            async with pg_adapter.get_session() as session:
-                result = await session.execute(query, (user_id, agent_name))
-                row = await result.fetchone()
+            async with pg_adapter.get_session_context() as session:
+                result = session.execute(text(query), (user_id, agent_name))
+                row = result.fetchone()
                 
                 return row[0] if row else {}
                 
@@ -408,9 +409,9 @@ class DatabaseConfigManager:
             WHERE kb_id = %s AND agent_name = %s AND is_active = TRUE
             """
             
-            async with pg_adapter.get_session() as session:
-                result = await session.execute(query, (kb_id, agent_name))
-                row = await result.fetchone()
+            async with pg_adapter.get_session_context() as session:
+                result = session.execute(text(query), (kb_id, agent_name))
+                row = result.fetchone()
                 
                 return row[0] if row else {}
                 

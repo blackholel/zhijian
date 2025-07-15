@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import yaml
 import uuid
+import dataclasses
 from pathlib import Path
 from typing import Annotated, TypedDict, TYPE_CHECKING, Optional, Dict, Any
 from abc import abstractmethod, ABC
@@ -65,83 +66,125 @@ class Configuration(dict):
         Returns:
             Configuration instance with merged config values
         """
-        # 获取类默认配置：创建一个实例获取所有默认值
-        instance = cls()
-        _fields = {f.name for f in fields(cls) if f.init}
-        
-        # 多级配置加载
-        merged_config = {}
-        
-        # 级别1: 类默认配置 (最低优先级)
-        for config_field in _fields:
-            if hasattr(instance, config_field):
-                merged_config[config_field] = getattr(instance, config_field)
-        
-        # 级别2: 数据库系统配置
         try:
-            from src.database.config_manager import DatabaseConfigManager
-            db_config_manager = DatabaseConfigManager()
-            system_config = await db_config_manager.get_agent_config(agent_name)
-            if system_config:
-                merged_config.update(system_config)
-                logger.debug(f"加载智能体系统配置: {agent_name}")
+            # 获取类的所有字段（包括继承的字段）
+            _fields = {f.name: f for f in fields(cls) if f.init}
+            
+            # 多级配置加载
+            merged_config = {}
+            
+            # 级别1: 类默认配置 (最低优先级)
+            for field_name, field_info in _fields.items():
+                if field_info.default != dataclasses.MISSING:
+                    merged_config[field_name] = field_info.default
+                elif field_info.default_factory != dataclasses.MISSING:
+                    merged_config[field_name] = field_info.default_factory()
+        
+            # 级别2: 数据库系统配置
+            try:
+                from src.database.config_manager import DatabaseConfigManager
+                from src.agents.config_validator import get_config_monitor
+                
+                db_config_manager = DatabaseConfigManager()
+                system_config = await db_config_manager.get_agent_config(agent_name)
+                if system_config:
+                    merged_config.update(system_config)
+                    logger.debug(f"加载智能体系统配置: {agent_name}")
+            except Exception as e:
+                logger.warning(f"加载智能体系统配置失败: {e}")
+                get_config_monitor().record_db_config_failure()
+        
+            # 级别3: 用户级配置
+            if user_context and user_context.user_id:
+                try:
+                    from src.database.config_manager import DatabaseConfigManager
+                    db_config_manager = DatabaseConfigManager()
+                    user_config = await db_config_manager.get_user_agent_config(
+                        user_context.user_id, agent_name
+                    )
+                    if user_config:
+                        merged_config.update(user_config)
+                        logger.debug(f"加载用户智能体配置: {user_context.user_id} - {agent_name}")
+                except Exception as e:
+                    logger.warning(f"加载用户智能体配置失败: {e}")
+            
+            # 级别4: 知识库级配置
+            if user_context and user_context.kb_id:
+                try:
+                    from src.database.config_manager import DatabaseConfigManager
+                    db_config_manager = DatabaseConfigManager()
+                    kb_config = await db_config_manager.get_kb_agent_config(
+                        user_context.kb_id, agent_name
+                    )
+                    if kb_config:
+                        merged_config.update(kb_config)
+                        logger.debug(f"加载知识库智能体配置: {user_context.kb_id} - {agent_name}")
+                except Exception as e:
+                    logger.warning(f"加载知识库智能体配置失败: {e}")
+            
+            # 级别5: 文件配置
+            if agent_name:
+                file_config = cls.from_file(agent_name)
+                if file_config:
+                    merged_config.update(file_config)
+        
+            # 级别6: 运行时配置 (最高优先级)
+            configurable = (config.get("configurable") or {}) if config else {}
+            if configurable:
+                from src.agents.config_validator import ConfigurationValidator, get_config_monitor
+                
+                # 过滤掉非配置字段，添加类型验证
+                for config_field in _fields.keys():
+                    if config_field in configurable:
+                        field_info = _fields[config_field]
+                        is_valid, converted_value = ConfigurationValidator.validate_field(
+                            config_field, configurable[config_field], field_info.type
+                        )
+                        if is_valid:
+                            merged_config[config_field] = converted_value
+                        else:
+                            get_config_monitor().record_validation_failure()
+                            # 使用默认值
+                            if field_info.default != dataclasses.MISSING:
+                                merged_config[config_field] = field_info.default
+            
+            # 过滤掉不属于当前类的字段
+            final_config = {}
+            for field_name in _fields.keys():
+                if field_name in merged_config:
+                    final_config[field_name] = merged_config[field_name]
+            
+            # 添加上下文信息（如果字段存在）
+            if "user_context" in _fields:
+                final_config["user_context"] = user_context
+            if "permission_context" in _fields and user_context:
+                final_config["permission_context"] = {
+                    "user_id": user_context.user_id,
+                    "permissions": list(user_context.permissions),
+                    "roles": user_context.roles
+                }
+            
+            # 创建并返回配置实例
+            logger.debug(f"智能体配置加载完成: {agent_name}, 配置字段: {list(final_config.keys())}")
+            return cls(**final_config)
+        
         except Exception as e:
-            logger.warning(f"加载智能体系统配置失败: {e}")
-        
-        # 级别3: 用户级配置
-        if user_context and user_context.user_id:
+            logger.error(f"配置加载失败: {e}")
+            from src.agents.config_validator import ConfigurationFallback, get_config_monitor
+            
+            # 最后的降级策略：使用降级配置
             try:
-                from src.database.config_manager import DatabaseConfigManager
-                db_config_manager = DatabaseConfigManager()
-                user_config = await db_config_manager.get_user_agent_config(
-                    user_context.user_id, agent_name
-                )
-                if user_config:
-                    merged_config.update(user_config)
-                    logger.debug(f"加载用户智能体配置: {user_context.user_id} - {agent_name}")
-            except Exception as e:
-                logger.warning(f"加载用户智能体配置失败: {e}")
-        
-        # 级别4: 知识库级配置
-        if user_context and user_context.kb_id:
-            try:
-                from src.database.config_manager import DatabaseConfigManager
-                db_config_manager = DatabaseConfigManager()
-                kb_config = await db_config_manager.get_kb_agent_config(
-                    user_context.kb_id, agent_name
-                )
-                if kb_config:
-                    merged_config.update(kb_config)
-                    logger.debug(f"加载知识库智能体配置: {user_context.kb_id} - {agent_name}")
-            except Exception as e:
-                logger.warning(f"加载知识库智能体配置失败: {e}")
-        
-        # 级别5: 文件配置
-        if agent_name:
-            file_config = cls.from_file(agent_name)
-            if file_config:
-                merged_config.update(file_config)
-        
-        # 级别6: 运行时配置 (最高优先级)
-        configurable = (config.get("configurable") or {}) if config else {}
-        if configurable:
-            # 过滤掉非配置字段
-            for config_field in _fields:
-                if config_field in configurable:
-                    merged_config[config_field] = configurable[config_field]
-        
-        # 添加上下文信息
-        merged_config["user_context"] = user_context
-        if user_context:
-            merged_config["permission_context"] = {
-                "user_id": user_context.user_id,
-                "permissions": list(user_context.permissions),
-                "roles": user_context.roles
-            }
-        
-        # 创建并返回配置实例
-        logger.debug(f"智能体配置合并完成: {agent_name}, 用户: {user_context.user_id if user_context else 'None'}")
-        return cls(**merged_config)
+                fallback_config = ConfigurationFallback.get_fallback_config(agent_name or "default")
+                get_config_monitor().record_config_load(success=False, fallback_used=True)
+                return cls(**fallback_config)
+            except Exception as fallback_error:
+                logger.error(f"降级配置创建失败: {fallback_error}")
+                # 最后的最后：使用空配置
+                try:
+                    return cls()
+                except Exception as final_error:
+                    logger.error(f"空配置创建失败: {final_error}")
+                    raise e
 
     @classmethod
     def from_file(cls, agent_name: str) -> Configuration:

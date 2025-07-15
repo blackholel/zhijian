@@ -171,14 +171,33 @@ async def execute_agent(
         from langchain_core.runnables import RunnableConfig
         config = request.config or {}
         
+        # 预处理和验证配置
+        configurable = {}
+        
+        # 添加用户ID和线程ID
+        configurable["user_id"] = current_user.id
+        configurable["thread_id"] = config.get("thread_id") or str(uuid.uuid4())
+        
+        # 验证和过滤配置字段
+        valid_config_fields = ["temperature", "max_tokens", "model", "system_prompt"]
+        for key, value in config.items():
+            if key in valid_config_fields:
+                try:
+                    # 基本类型转换
+                    if key == "temperature":
+                        configurable[key] = float(value)
+                    elif key == "max_tokens":
+                        configurable[key] = int(value)
+                    elif key in ["model", "system_prompt"]:
+                        configurable[key] = str(value)
+                    else:
+                        configurable[key] = value
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"配置字段类型转换失败: {key}={value}, 错误: {e}")
+                    # 忽略无效配置项
+        
         # 构建符合LangGraph要求的RunnableConfig
-        runnable_config = RunnableConfig(
-            configurable={
-                "user_id": current_user.id,
-                "thread_id": config.get("thread_id") or str(uuid.uuid4()),
-                **config  # 合并请求中的配置
-            }
-        )
+        runnable_config = RunnableConfig(configurable=configurable)
         
         if request.stream:
             # 流式响应
@@ -217,7 +236,14 @@ async def execute_agent(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"执行智能体 {request.agent_name} 失败: {e}")
-        raise HTTPException(status_code=500, detail=f"执行智能体失败: {str(e)}")
+        # 提供更详细的错误信息
+        if "unexpected keyword argument" in str(e):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"配置参数错误: {str(e)}. 请检查配置字段是否正确."
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"智能体执行失败: {str(e)}")
 
 async def _stream_agent_response(
     agent_manager,
