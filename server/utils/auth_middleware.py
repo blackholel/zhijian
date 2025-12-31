@@ -42,19 +42,20 @@ async def get_current_user(token: str | None = Depends(oauth2_scheme), db: Async
         return None
 
     try:
-        # 验证token
         payload = AuthUtils.verify_access_token(token)
         user_id = payload.get("sub")
         if user_id is None:
             raise credentials_exception
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError):
+            raise credentials_exception
     except JWTError:
         raise credentials_exception
     except ValueError as e:
-        # 捕获AuthUtils.verify_access_token可能抛出的ValueError
-        # 例如令牌过期或无效
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e),  # 将错误信息直接传递给客户端
+            detail=str(e),
             headers={"WWW-Authenticate": "Bearer"},
         )
 

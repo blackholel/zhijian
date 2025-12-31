@@ -151,7 +151,21 @@ class BaseAgent:
         checkpointer = None
 
         try:
-            checkpointer = AsyncSqliteSaver(await self.get_async_conn())
+            # 判断是否使用 PostgreSQL
+            postgres_uri = os.getenv("POSTGRES_URI")
+            if postgres_uri:
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+                # 转换为 asyncpg 连接字符串
+                conn_string = postgres_uri.replace("postgresql+asyncpg://", "postgresql://")
+
+                # 创建 PostgreSQL checkpointer
+                checkpointer = AsyncPostgresSaver.from_conn_string(conn_string)
+                await checkpointer.setup()  # 初始化表结构
+                logger.info(f"使用 PostgreSQL 检查点存储: {postgres_uri}")
+            else:
+                checkpointer = AsyncSqliteSaver(await self.get_async_conn())
+                logger.info(f"使用 SQLite 检查点存储: {os.path.join(self.workdir, 'aio_history.db')}")
 
         except Exception as e:
             logger.error(f"构建 Graph 设置 checkpointer 时出错: {e}, 尝试使用内存存储")

@@ -23,8 +23,8 @@ class Conversation(Base):
     agent_id = Column(String(64), index=True, nullable=False, comment="Agent ID")
     title = Column(String(255), nullable=True, comment="Conversation title")
     status = Column(String(20), default="active", comment="Status: active/archived/deleted")
-    created_at = Column(DateTime, default=utc_now, comment="Creation time")
-    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, comment="Update time")
+    created_at = Column(DateTime(timezone=True), default=utc_now, comment="Creation time")
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, comment="Update time")
     extra_metadata = Column(JSON, nullable=True, comment="Additional metadata")
 
     # Relationships
@@ -66,7 +66,7 @@ class Message(Base):
     role = Column(String(20), nullable=False, comment="Message role: user/assistant/system/tool")
     content = Column(Text, nullable=False, comment="Message content")
     message_type = Column(String(30), default="text", comment="Message type: text/tool_call/tool_result")
-    created_at = Column(DateTime, default=utc_now, comment="Creation time")
+    created_at = Column(DateTime(timezone=True), default=utc_now, comment="Creation time")
     token_count = Column(Integer, nullable=True, comment="Token count (optional)")
     extra_metadata = Column(JSON, nullable=True, comment="Additional metadata (complete message dump)")
     image_content = Column(Text, nullable=True, comment="Base64 encoded image content for multimodal messages")
@@ -157,8 +157,8 @@ class ConversationStats(Base):
     total_tokens = Column(Integer, default=0, comment="Total tokens used")
     model_used = Column(String(100), nullable=True, comment="Model used")
     user_feedback = Column(JSON, nullable=True, comment="User feedback")
-    created_at = Column(DateTime, default=utc_now, comment="Creation time")
-    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, comment="Update time")
+    created_at = Column(DateTime(timezone=True), default=utc_now, comment="Creation time")
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, comment="Update time")
 
     # Relationships
     conversation = relationship("Conversation", back_populates="stats")
@@ -195,17 +195,17 @@ class User(Base):
     avatar = Column(String, nullable=True)  # 头像URL
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default="user")  # 角色: superadmin, admin, user
-    created_at = Column(DateTime, default=utc_now)
-    last_login = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    last_login = Column(DateTime(timezone=True), nullable=True)
 
     # 登录失败限制相关字段
     login_failed_count = Column(Integer, nullable=False, default=0)  # 登录失败次数
-    last_failed_login = Column(DateTime, nullable=True)  # 最后一次登录失败时间
-    login_locked_until = Column(DateTime, nullable=True)  # 锁定到什么时候
+    last_failed_login = Column(DateTime(timezone=True), nullable=True)  # 最后一次登录失败时间
+    login_locked_until = Column(DateTime(timezone=True), nullable=True)  # 锁定到什么时候
 
     # 软删除相关字段
     is_deleted = Column(Integer, nullable=False, default=0, index=True)  # 是否已删除：0=否，1=是
-    deleted_at = Column(DateTime, nullable=True)  # 删除时间
+    deleted_at = Column(DateTime(timezone=True), nullable=True)  # 删除时间
 
     # 关联操作日志
     operation_logs = relationship("OperationLog", back_populates="user", cascade="all, delete-orphan")
@@ -292,7 +292,7 @@ class OperationLog(Base):
     operation = Column(String, nullable=False)
     details = Column(Text, nullable=True)
     ip_address = Column(String, nullable=True)
-    timestamp = Column(DateTime, default=utc_now)
+    timestamp = Column(DateTime(timezone=True), default=utc_now)
 
     # 关联用户
     user = relationship("User", back_populates="operation_logs")
@@ -327,7 +327,7 @@ class MessageFeedback(Base):
     user_id = Column(String(64), nullable=False, index=True, comment="User ID who provided feedback")
     rating = Column(String(10), nullable=False, comment="Feedback rating: like or dislike")
     reason = Column(Text, nullable=True, comment="Optional reason for dislike feedback")
-    created_at = Column(DateTime, default=utc_now, comment="Feedback creation time")
+    created_at = Column(DateTime(timezone=True), default=utc_now, comment="Feedback creation time")
 
     # Relationships
     message = relationship("Message", backref="feedbacks")

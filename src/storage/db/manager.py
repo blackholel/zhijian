@@ -30,23 +30,42 @@ class DBManager(metaclass=SingletonMeta):
         self.db_path = os.path.join(config.save_dir, "database", "server.db")
         self.ensure_db_dir()
 
-        # 创建异步SQLAlchemy引擎，配置JSON序列化器以支持中文
-        # 使用 ensure_ascii=False 确保中文字符不被转义为 Unicode 序列
-        self.async_engine = create_async_engine(
-            f"sqlite+aiosqlite:///{self.db_path}",
-            json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
-            json_deserializer=json.loads,
-        )
+        # 使用环境变量判断是否使用 PostgreSQL
+        self.db_url = os.getenv("POSTGRES_URI")
+
+        if self.db_url and self.db_url.startswith("postgresql"):
+            # 创建异步引擎
+            self.async_engine = create_async_engine(
+                self.db_url,
+                json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
+                json_deserializer=json.loads,
+                pool_pre_ping=True,  # 连接健康检查
+                pool_size=10,
+                max_overflow=20,
+            )
+            self.engine = create_engine(
+                self.db_url.replace("+asyncpg", ""),  # 移除 asyncpg 前缀用于同步引擎
+                json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
+                json_deserializer=json.loads,
+            )
+        else:
+            # 创建异步SQLAlchemy引擎，配置JSON序列化器以支持中文
+            # 使用 ensure_ascii=False 确保中文字符不被转义为 Unicode 序列
+            self.async_engine = create_async_engine(
+                f"sqlite+aiosqlite:///{self.db_path}",
+                json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
+                json_deserializer=json.loads,
+            )
+            # 保留同步引擎用于迁移等特殊操作
+            self.engine = create_engine(
+                f"sqlite:///{self.db_path}",
+                json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
+                json_deserializer=json.loads,
+            )
 
         # 创建异步会话工厂
         self.AsyncSession = async_sessionmaker(bind=self.async_engine, class_=AsyncSession, expire_on_commit=False)
 
-        # 保留同步引擎用于迁移等特殊操作
-        self.engine = create_engine(
-            f"sqlite:///{self.db_path}",
-            json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
-            json_deserializer=json.loads,
-        )
         self.Session = sessionmaker(bind=self.engine)
 
         # 首先创建基本表结构
