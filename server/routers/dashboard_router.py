@@ -5,15 +5,17 @@ Provides centralized dashboard APIs for monitoring system-wide statistics.
 """
 
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import String, cast, distinct, func, or_, select
+from sqlalchemy import String, cast, distinct, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.routers.auth_router import get_admin_user
 from server.utils.auth_middleware import get_db
+from src.config.app import config
 from src.storage.conversation import ConversationManager
 from src.storage.db.models import User
 from src.utils.datetime_utils import UTC, ensure_shanghai, shanghai_now, utc_now
@@ -307,6 +309,11 @@ async def get_tool_call_stats(
 
         now = utc_now()
 
+        # ToolCall.created_at is defined as DateTime (naive) in models.py
+        # We need to use naive datetime for comparison to avoid offset-naive/aware mismatch
+        # especially with asyncpg
+        now_naive = now.replace(tzinfo=None)
+
         # 基础工具调用统计
         total_calls_result = await db.execute(select(func.count(ToolCall.id)))
         total_calls = total_calls_result.scalar() or 0
@@ -338,8 +345,8 @@ async def get_tool_call_stats(
         # 最近7天每日工具调用数
         daily_tool_calls = []
         for i in range(7):
-            day_start = now - timedelta(days=i + 1)
-            day_end = now - timedelta(days=i)
+            day_start = now_naive - timedelta(days=i + 1)
+            day_end = now_naive - timedelta(days=i)
 
             daily_count_result = await db.execute(
                 select(func.count(ToolCall.id)).filter(ToolCall.created_at >= day_start, ToolCall.created_at < day_end)
@@ -381,10 +388,11 @@ async def get_knowledge_stats(
         import os
 
         # 从知识库管理系统获取数据
-        kb_manager = KnowledgeBaseManager(work_dir="/app/saves/knowledge_base_data")
+        kb_dir = os.path.join(config.save_dir, "knowledge_base_data")
+        kb_manager = KnowledgeBaseManager(work_dir=kb_dir)
 
         # 读取全局元数据文件
-        metadata_file = "/app/saves/knowledge_base_data/global_metadata.json"
+        metadata_file = os.path.join(kb_dir, "global_metadata.json")
         if os.path.exists(metadata_file):
             with open(metadata_file, encoding="utf-8") as f:
                 global_metadata = json.load(f)
@@ -757,6 +765,50 @@ async def get_call_timeseries_stats(
     try:
         from src.storage.db.models import Conversation, Message, ToolCall
 
+        # Determine dialect
+        dialect_name = "sqlite"
+        if db.bind:
+            dialect_name = db.bind.dialect.name
+
+        def get_date_group_expression(col, range_type):
+            if dialect_name == "postgresql":
+                # For PostgreSQL, use to_char with interval addition
+                # 'IW' is ISO week number (01-53)
+                # 'HH24' is 24-hour clock
+                col_adjusted = col + text("INTERVAL '8 hours'")
+                if range_type == "14hours":
+                    return func.to_char(col_adjusted, "YYYY-MM-DD HH24:00")
+                elif range_type == "14weeks":
+                    return func.to_char(col_adjusted, "YYYY-IW")
+                else:
+                    return func.to_char(col_adjusted, "YYYY-MM-DD")
+            else:
+                # SQLite
+                if range_type == "14hours":
+                    return func.strftime("%Y-%m-%d %H:00", func.datetime(col, "+8 hours"))
+                elif range_type == "14weeks":
+                    return func.strftime("%Y-%W", func.datetime(col, "+8 hours"))
+                else:
+                    return func.strftime("%Y-%m-%d", func.datetime(col, "+8 hours"))
+
+        def get_json_field(col, path, cast_type=None):
+            """
+            Cross-database JSON extraction.
+            path format: "$.key1.key2"
+            """
+            if dialect_name == "postgresql":
+                # PostgreSQL: Use json_extract_path_text
+                # Parse path "$.a.b" -> ['a', 'b']
+                keys = path.replace("$.", "").split(".")
+                expr = func.json_extract_path_text(col, *keys)
+                if cast_type:
+                    return cast(expr, cast_type)
+                return expr
+            else:
+                # SQLite: Use json_extract
+                expr = func.json_extract(col, path)
+                return expr
+
         # 计算时间范围（使用北京时间 UTC+8）
         now = utc_now()
         local_now = shanghai_now()
@@ -765,7 +817,7 @@ async def get_call_timeseries_stats(
             intervals = 14
             # 包含当前小时：从13小时前开始
             start_time = now - timedelta(hours=intervals - 1)
-            group_format = func.strftime("%Y-%m-%d %H:00", func.datetime(Message.created_at, "+8 hours"))
+            group_format_col = Message.created_at  # Placeholder
             base_local_time = ensure_shanghai(start_time)
         elif time_range == "14weeks":
             intervals = 14
@@ -774,70 +826,71 @@ async def get_call_timeseries_stats(
             local_start = local_start - timedelta(days=local_start.weekday())
             local_start = local_start.replace(hour=0, minute=0, second=0, microsecond=0)
             start_time = local_start.astimezone(UTC)
-            group_format = func.strftime("%Y-%W", func.datetime(Message.created_at, "+8 hours"))
+            group_format_col = Message.created_at  # Placeholder
             base_local_time = local_start
         else:  # 14days (default)
             intervals = 14
             # 包含当前天：从13天前开始
             start_time = now - timedelta(days=intervals - 1)
-            group_format = func.strftime("%Y-%m-%d", func.datetime(Message.created_at, "+8 hours"))
+            group_format_col = Message.created_at  # Placeholder
             base_local_time = ensure_shanghai(start_time)
 
         # 根据类型查询数据
         if type == "models":
+            group_format = get_date_group_expression(Message.created_at, time_range)
             # 模型调用统计（基于消息数量，按模型分组）
             # 从message的extra_metadata中提取模型信息
+            model_name_expr = get_json_field(Message.extra_metadata, "$.response_metadata.model_name")
             query_result = await db.execute(
                 select(
                     group_format.label("date"),
                     func.count(Message.id).label("count"),
-                    func.json_extract(Message.extra_metadata, "$.response_metadata.model_name").label("category"),
+                    model_name_expr.label("category"),
                 )
                 .filter(Message.role == "assistant", Message.created_at >= start_time)
                 .filter(Message.extra_metadata.isnot(None))
-                .group_by(group_format, func.json_extract(Message.extra_metadata, "$.response_metadata.model_name"))
+                .group_by(group_format, model_name_expr)
                 .order_by(group_format)
             )
             query = query_result.all()
         elif type == "agents":
+            group_format = get_date_group_expression(Conversation.updated_at, time_range)
             # 智能体调用统计（基于对话更新时间，按智能体分组）
-            # 为对话创建独立的时间格式化器
-            if time_range == "14hours":
-                conv_group_format = func.strftime("%Y-%m-%d %H:00", func.datetime(Conversation.updated_at, "+8 hours"))
-            elif time_range == "14weeks":
-                conv_group_format = func.strftime("%Y-%W", func.datetime(Conversation.updated_at, "+8 hours"))
-            else:  # 14days
-                conv_group_format = func.strftime("%Y-%m-%d", func.datetime(Conversation.updated_at, "+8 hours"))
-
+            
             query_result = await db.execute(
                 select(
-                    conv_group_format.label("date"),
+                    group_format.label("date"),
                     func.count(Conversation.id).label("count"),
                     Conversation.agent_id.label("category"),
                 )
                 .filter(Conversation.updated_at.isnot(None))
                 .filter(Conversation.updated_at >= start_time)
-                .group_by(conv_group_format, Conversation.agent_id)
-                .order_by(conv_group_format)
+                .group_by(group_format, Conversation.agent_id)
+                .order_by(group_format)
             )
             query = query_result.all()
         elif type == "tokens":
+            group_format = get_date_group_expression(Message.created_at, time_range)
             # Token消耗统计（区分input/output tokens）
             # 先查询input tokens
             from sqlalchemy import literal
+            from sqlalchemy import Integer
+
+            input_tokens_expr = get_json_field(Message.extra_metadata, "$.usage_metadata.input_tokens", Integer)
+            usage_metadata_expr = get_json_field(Message.extra_metadata, "$.usage_metadata")
 
             input_query_result = await db.execute(
                 select(
                     group_format.label("date"),
                     func.sum(
-                        func.coalesce(func.json_extract(Message.extra_metadata, "$.usage_metadata.input_tokens"), 0)
+                        func.coalesce(input_tokens_expr, 0)
                     ).label("count"),
                     literal("input_tokens").label("category"),
                 )
                 .filter(
                     Message.created_at >= start_time,
                     Message.extra_metadata.isnot(None),
-                    func.json_extract(Message.extra_metadata, "$.usage_metadata").isnot(None),
+                    usage_metadata_expr.isnot(None),
                 )
                 .group_by(group_format)
                 .order_by(group_format)
@@ -845,18 +898,20 @@ async def get_call_timeseries_stats(
             input_query = input_query_result.all()
 
             # 查询output tokens
+            output_tokens_expr = get_json_field(Message.extra_metadata, "$.usage_metadata.output_tokens", Integer)
+            
             output_query_result = await db.execute(
                 select(
                     group_format.label("date"),
                     func.sum(
-                        func.coalesce(func.json_extract(Message.extra_metadata, "$.usage_metadata.output_tokens"), 0)
+                        func.coalesce(output_tokens_expr, 0)
                     ).label("count"),
                     literal("output_tokens").label("category"),
                 )
                 .filter(
                     Message.created_at >= start_time,
                     Message.extra_metadata.isnot(None),
-                    func.json_extract(Message.extra_metadata, "$.usage_metadata").isnot(None),
+                    usage_metadata_expr.isnot(None),
                 )
                 .group_by(group_format)
                 .order_by(group_format)
@@ -869,23 +924,20 @@ async def get_call_timeseries_stats(
             results = input_results + output_results
         elif type == "tools":
             # 工具调用统计（按工具名称分组）
-            # 为工具调用创建独立的时间格式化器
-            if time_range == "14hours":
-                tool_group_format = func.strftime("%Y-%m-%d %H:00", func.datetime(ToolCall.created_at, "+8 hours"))
-            elif time_range == "14weeks":
-                tool_group_format = func.strftime("%Y-%W", func.datetime(ToolCall.created_at, "+8 hours"))
-            else:  # 14days
-                tool_group_format = func.strftime("%Y-%m-%d", func.datetime(ToolCall.created_at, "+8 hours"))
+            # Handle naive datetime for ToolCall
+            start_time_naive = start_time.replace(tzinfo=None)
+            
+            group_format = get_date_group_expression(ToolCall.created_at, time_range)
 
             query_result = await db.execute(
                 select(
-                    tool_group_format.label("date"),
+                    group_format.label("date"),
                     func.count(ToolCall.id).label("count"),
                     ToolCall.tool_name.label("category"),
                 )
-                .filter(ToolCall.created_at >= start_time)
-                .group_by(tool_group_format, ToolCall.tool_name)
-                .order_by(tool_group_format)
+                .filter(ToolCall.created_at >= start_time_naive)
+                .group_by(group_format, ToolCall.tool_name)
+                .order_by(group_format)
             )
             query = query_result.all()
         else:
