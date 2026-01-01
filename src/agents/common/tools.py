@@ -109,7 +109,7 @@ def get_static_tools() -> list:
 class KnowledgeRetrieverModel(BaseModel):
     query_text: str = Field(
         description=(
-            "查询的关键词，查询的时候，应该尽量以可能帮助回答这个问题的关键词进行查询，不要直接使用用户的原始输入去查询。"
+            "查询的内容或关键词。请将所有主题、概念、实体等搜索条件都放在这里，不要放入 file_name。"
         )
     )
     operation: str = Field(
@@ -125,7 +125,9 @@ class KnowledgeRetrieverModel(BaseModel):
 class CommonKnowledgeRetriever(KnowledgeRetrieverModel):
     """Common knowledge retriever model."""
 
-    file_name: str = Field(description="限定文件名称，当操作类型为 'search' 时，可以指定文件名称，支持模糊匹配")
+    file_name: str = Field(
+        description="仅用于限定要搜索的源文件名。**切勿**用于主题或关键词过滤。仅在用户明确指定在特定文件中搜索时使用。支持模糊匹配"
+    )
 
 
 def get_kb_based_tools(db_names: list[str] | None = None) -> list:
