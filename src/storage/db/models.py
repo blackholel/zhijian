@@ -118,7 +118,7 @@ class ToolCall(Base):
     tool_output = Column(Text, nullable=True, comment="Tool execution result")
     status = Column(String(20), default="pending", comment="Status: pending/success/error")
     error_message = Column(Text, nullable=True, comment="Error message if failed")
-    created_at = Column(DateTime, default=utc_now, comment="Creation time")
+    created_at = Column(DateTime(timezone=True), default=utc_now, comment="Creation time")
 
     # Relationships
     message = relationship("Message", back_populates="tool_calls")

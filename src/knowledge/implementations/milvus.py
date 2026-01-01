@@ -6,6 +6,7 @@ from functools import partial
 from typing import Any
 
 from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, db, utility
+from pymilvus.exceptions import ConnectionNotExistException, MilvusException
 
 from src import config
 from src.knowledge.base import KnowledgeBase
@@ -76,9 +77,9 @@ class MilvusKB(KnowledgeBase):
 
             # 创建数据库（如果不存在）
             try:
-                if self.milvus_db not in db.list_database():
-                    db.create_database(self.milvus_db)
-                db.using_database(self.milvus_db)
+                if self.milvus_db not in db.list_database(using=self.connection_alias):
+                    db.create_database(self.milvus_db, using=self.connection_alias)
+                db.using_database(self.milvus_db, using=self.connection_alias)
             except Exception as e:
                 logger.warning(f"Database operation failed, using default: {e}")
 
@@ -91,6 +92,11 @@ class MilvusKB(KnowledgeBase):
     async def _create_kb_instance(self, db_id: str, kb_config: dict) -> Any:
         """创建 Milvus 集合"""
         logger.info(f"Creating Milvus collection for {db_id}")
+
+        # 检查连接是否存在
+        if not connections.has_connection(self.connection_alias):
+            logger.warning(f"Connection {self.connection_alias} missing, re-initializing...")
+            self._init_connection()
 
         if not (metadata := self.databases_meta.get(db_id)):
             raise ValueError(f"Database {db_id} not found")
@@ -125,8 +131,17 @@ class MilvusKB(KnowledgeBase):
                 logger.info(f"Collection {collection_name} not found, creating new one")
                 return self._create_new_collection(collection_name, embed_info, db_id)
 
-        except (connections.MilvusException, RuntimeError) as e:
+        except (MilvusException, RuntimeError) as e:
             logger.error(f"Error checking collection {collection_name}: {e}")
+            
+            # 如果是连接不存在，尝试重连一次
+            if isinstance(e, ConnectionNotExistException) or "should create connection first" in str(e):
+                 logger.warning(f"Connection lost during collection check, retrying...")
+                 self._init_connection()
+                 if utility.has_collection(collection_name, using=self.connection_alias):
+                    return Collection(name=collection_name, using=self.connection_alias)
+                 else:
+                    return self._create_new_collection(collection_name, embed_info, db_id)
             raise
         except Exception as e:
             logger.error(f"Unexpected error while managing collection {collection_name}: {e}")
