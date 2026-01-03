@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -10,6 +10,43 @@ Base = declarative_base()
 
 
 ## Removed legacy RDBMS knowledge models (KnowledgeDatabase/KnowledgeFile/KnowledgeNode)
+
+
+class KnowledgeDatabase(Base):
+    __tablename__ = "knowledge_databases"
+
+    db_id = Column(String(128), primary_key=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    kb_type = Column(String(64), nullable=False)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+
+    embed_info = Column(JSON, nullable=True)
+    llm_info = Column(JSON, nullable=True)
+    kb_metadata = Column("metadata", JSON, nullable=True)
+    additional_params = Column(JSON, nullable=True)
+    global_meta = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class KnowledgeFile(Base):
+    __tablename__ = "knowledge_files"
+
+    file_id = Column(String(128), primary_key=True)
+    db_id = Column(String(128), ForeignKey("knowledge_databases.db_id"), nullable=False, index=True)
+    filename = Column(String(512), nullable=False, default="")
+    path = Column(Text, nullable=True)
+    file_type = Column(String(64), nullable=True)
+    status = Column(String(32), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    content_hash = Column(String(128), nullable=True)
+    parent_id = Column(String(128), nullable=True, index=True)
+    processing_params = Column(JSON, nullable=True)
+    is_folder = Column(Boolean, nullable=False, default=False)
 
 
 class Conversation(Base):

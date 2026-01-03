@@ -108,9 +108,7 @@ def get_static_tools() -> list:
 
 class KnowledgeRetrieverModel(BaseModel):
     query_text: str = Field(
-        description=(
-            "查询的内容或关键词。请将所有主题、概念、实体等搜索条件都放在这里，不要放入 file_name。"
-        )
+        description=("查询的内容或关键词。请将所有主题、概念、实体等搜索条件都放在这里，不要放入 file_name。")
     )
     operation: str = Field(
         default="search",
@@ -150,12 +148,25 @@ def get_kb_based_tools(db_names: list[str] | None = None) -> list:
                 try:
                     logger.debug(f"Getting mindmap for database {db_id}")
 
-                    # 从知识库元数据中获取思维导图
-                    if db_id not in knowledge_base.global_databases_meta:
+                    from sqlalchemy import select
+
+                    from src.storage.db.manager import db_manager
+                    from src.storage.db.models import KnowledgeDatabase
+
+                    async with db_manager.get_async_session_context() as db:
+                        result = await db.execute(
+                            select(KnowledgeDatabase).where(
+                                KnowledgeDatabase.db_id == db_id,
+                                KnowledgeDatabase.deleted_at.is_(None),
+                            )
+                        )
+                        row = result.scalar_one_or_none()
+
+                    if row is None:
                         return f"知识库 {retriever_info['name']} 不存在"
 
-                    db_meta = knowledge_base.global_databases_meta[db_id]
-                    mindmap_data = db_meta.get("mindmap")
+                    global_meta = dict(row.global_meta or {})
+                    mindmap_data = global_meta.get("mindmap")
 
                     if not mindmap_data:
                         return f"知识库 {retriever_info['name']} 还没有生成思维导图。"

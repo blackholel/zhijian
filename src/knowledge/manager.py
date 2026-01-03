@@ -1,11 +1,10 @@
 import asyncio
-import json
 import os
-import shutil
-import tempfile
 
 from src.knowledge.base import KBNotFoundError, KnowledgeBase
 from src.knowledge.factory import KnowledgeBaseFactory
+from src.storage.db.manager import db_manager
+from src.storage.db.models import KnowledgeDatabase
 from src.utils import logger
 from src.utils.datetime_utils import coerce_any_to_utc_datetime, utc_isoformat
 
@@ -63,69 +62,61 @@ class KnowledgeBaseManager:
         #     logger.warning(f"初始化时运行数据一致性检测失败: {e}")
 
     def _load_global_metadata(self):
-        """加载全局元数据"""
-        meta_file = os.path.join(self.work_dir, "global_metadata.json")
+        from sqlalchemy import select
 
-        if os.path.exists(meta_file):
-            try:
-                with open(meta_file, encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.global_databases_meta = data.get("databases", {})
-                logger.info(f"Loaded global metadata for {len(self.global_databases_meta)} databases")
-            except Exception as e:
-                logger.error(f"Failed to load global metadata: {e}")
-                # 尝试从备份恢复
-                backup_file = f"{meta_file}.backup"
-                if os.path.exists(backup_file):
-                    try:
-                        with open(backup_file, encoding="utf-8") as f:
-                            data = json.load(f)
-                            self.global_databases_meta = data.get("databases", {})
-                        logger.info("Loaded global metadata from backup")
-                        # 恢复备份文件
-                        shutil.copy2(backup_file, meta_file)
-                        return
-                    except Exception as backup_e:
-                        logger.error(f"Failed to load backup: {backup_e}")
+        self.global_databases_meta = {}
+        with db_manager.get_session_context() as db:
+            rows = db.execute(select(KnowledgeDatabase).where(KnowledgeDatabase.deleted_at.is_(None))).scalars().all()
+            for row in rows:
+                global_meta = dict(row.global_meta or {})
+                self.global_databases_meta[row.db_id] = {
+                    "name": row.name,
+                    "description": row.description,
+                    "kb_type": row.kb_type,
+                    "created_at": utc_isoformat(coerce_any_to_utc_datetime(row.created_at) or row.created_at),
+                    "additional_params": dict(row.additional_params or {}),
+                    "query_params": global_meta.get("query_params"),
+                    "sample_questions": global_meta.get("sample_questions"),
+                    "mindmap": global_meta.get("mindmap"),
+                }
 
-                # 如果加载失败，初始化为空状态
-                logger.warning("Initializing empty global metadata")
-                self.global_databases_meta = {}
+        logger.info(f"Loaded global metadata for {len(self.global_databases_meta)} databases from database")
 
     def _save_global_metadata(self):
-        """保存全局元数据"""
+        from sqlalchemy import select
+
         self._normalize_global_metadata()
-        meta_file = os.path.join(self.work_dir, "global_metadata.json")
-        backup_file = f"{meta_file}.backup"
+        with db_manager.get_session_context() as db:
+            for db_id, meta in self.global_databases_meta.items():
+                row = (
+                    db.execute(select(KnowledgeDatabase).where(KnowledgeDatabase.db_id == db_id))
+                    .scalars()
+                    .one_or_none()
+                )
+                if row is None:
+                    row = KnowledgeDatabase(
+                        db_id=db_id,
+                        name=meta.get("name", ""),
+                        description=meta.get("description", "") or "",
+                        kb_type=meta.get("kb_type", "lightrag"),
+                    )
+                    db.add(row)
+                else:
+                    row.name = meta.get("name", row.name)
+                    row.description = meta.get("description", row.description) or ""
+                    row.kb_type = meta.get("kb_type", row.kb_type)
 
-        try:
-            # 创建简单备份
-            if os.path.exists(meta_file):
-                shutil.copy2(meta_file, backup_file)
+                row.additional_params = dict(meta.get("additional_params") or {})
+                global_meta = dict(row.global_meta or {})
+                if "query_params" in meta:
+                    global_meta["query_params"] = meta.get("query_params")
+                if "sample_questions" in meta:
+                    global_meta["sample_questions"] = meta.get("sample_questions")
+                if "mindmap" in meta:
+                    global_meta["mindmap"] = meta.get("mindmap")
+                row.global_meta = global_meta
 
-            # 准备数据
-            data = {"databases": self.global_databases_meta, "updated_at": utc_isoformat(), "version": "2.0"}
-
-            # 原子性写入（使用临时文件）
-            with tempfile.NamedTemporaryFile(
-                mode="w", dir=os.path.dirname(meta_file), prefix=".tmp_", suffix=".json", delete=False
-            ) as tmp_file:
-                json.dump(data, tmp_file, ensure_ascii=False, indent=2)
-                temp_path = tmp_file.name
-
-            os.replace(temp_path, meta_file)
-            logger.debug("Saved global metadata")
-
-        except Exception as e:
-            logger.error(f"Failed to save global metadata: {e}")
-            # 尝试恢复备份
-            if os.path.exists(backup_file):
-                try:
-                    shutil.copy2(backup_file, meta_file)
-                    logger.info("Restored global metadata from backup")
-                except Exception as restore_e:
-                    logger.error(f"Failed to restore backup: {restore_e}")
-            raise e
+        logger.debug("Saved global metadata to database")
 
     def _normalize_global_metadata(self) -> None:
         """Normalize stored timestamps within the global metadata cache."""
@@ -280,6 +271,10 @@ class KnowledgeBaseManager:
                 if db_id in self.global_databases_meta:
                     del self.global_databases_meta[db_id]
                     self._save_global_metadata()
+                from sqlalchemy import delete
+
+                async with db_manager.get_async_session_context() as db:
+                    await db.execute(delete(KnowledgeDatabase).where(KnowledgeDatabase.db_id == db_id))
 
             return result
         except KBNotFoundError as e:

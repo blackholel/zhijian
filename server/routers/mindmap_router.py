@@ -13,11 +13,14 @@ import traceback
 import textwrap
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.storage.db.models import User
-from server.utils.auth_middleware import get_admin_user
+from server.utils.auth_middleware import get_admin_user, get_db
 from src import knowledge_base
 from src.models import select_model
+from src.storage.db.models import KnowledgeDatabase
 from src.utils import logger
 
 mindmap = APIRouter(prefix="/mindmap", tags=["mindmap"])
@@ -139,6 +142,7 @@ async def generate_mindmap(
     db_id: str = Body(..., description="知识库ID"),
     file_ids: list[str] = Body(default=[], description="选择的文件ID列表"),
     user_prompt: str = Body(default="", description="用户自定义提示词"),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_admin_user),
 ):
     """
@@ -242,16 +246,28 @@ async def generate_mindmap(
 
             logger.info("思维导图生成成功")
 
-            # 保存思维导图到知识库元数据
+            try:
+                result = await db.execute(
+                    select(KnowledgeDatabase).where(
+                        KnowledgeDatabase.db_id == db_id,
+                        KnowledgeDatabase.deleted_at.is_(None),
+                    )
+                )
+                row = result.scalar_one_or_none()
+                if row:
+                    global_meta = dict(row.global_meta or {})
+                    global_meta["mindmap"] = mindmap_data
+                    row.global_meta = global_meta
+                    await db.commit()
+            except Exception as save_error:
+                logger.error(f"保存思维导图失败: {save_error}, {traceback.format_exc()}")
+
             try:
                 async with knowledge_base._metadata_lock:
                     if db_id in knowledge_base.global_databases_meta:
                         knowledge_base.global_databases_meta[db_id]["mindmap"] = mindmap_data
-                        knowledge_base._save_global_metadata()
-                        logger.info(f"思维导图已保存到知识库: {db_id}")
-            except Exception as save_error:
-                logger.error(f"保存思维导图失败: {save_error}")
-                # 不影响返回结果，只记录错误
+            except Exception as cache_error:
+                logger.error(f"更新思维导图缓存失败: {cache_error}")
 
             return {
                 "message": "success",
@@ -330,7 +346,11 @@ async def get_databases_overview(current_user: User = Depends(get_admin_user)):
 
 
 @mindmap.get("/database/{db_id}")
-async def get_database_mindmap(db_id: str, current_user: User = Depends(get_admin_user)):
+async def get_database_mindmap(
+    db_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_admin_user),
+):
     """
     获取知识库关联的思维导图
 
@@ -341,18 +361,24 @@ async def get_database_mindmap(db_id: str, current_user: User = Depends(get_admi
         思维导图数据
     """
     try:
-        # 直接从全局元数据中读取思维导图
-        if db_id not in knowledge_base.global_databases_meta:
+        result = await db.execute(
+            select(KnowledgeDatabase).where(
+                KnowledgeDatabase.db_id == db_id,
+                KnowledgeDatabase.deleted_at.is_(None),
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
             raise HTTPException(status_code=404, detail=f"知识库 {db_id} 不存在")
 
-        db_meta = knowledge_base.global_databases_meta[db_id]
-        mindmap_data = db_meta.get("mindmap")
+        global_meta = dict(row.global_meta or {})
+        mindmap_data = global_meta.get("mindmap")
 
         return {
             "message": "success",
             "mindmap": mindmap_data,
             "db_id": db_id,
-            "db_name": db_meta.get("name", ""),
+            "db_name": row.name,
         }
 
     except HTTPException:

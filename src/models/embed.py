@@ -22,6 +22,8 @@ class BaseEmbeddingModel(ABC):
             api_key: 请求API密钥
         """
         base_url = base_url or url
+        if isinstance(base_url, str):
+            base_url = base_url.strip().replace("`", "")
         self.model = model or name
         self.dimension = dimension
         self.base_url = get_docker_safe_url(base_url)
@@ -96,6 +98,13 @@ class BaseEmbeddingModel(ABC):
         Returns:
             tuple: (success: bool, message: str)
         """
+        if isinstance(self.api_key, str) and self.api_key.endswith("_API_KEY"):
+            return False, "未配置 API Key"
+
+        if self.api_key == "no_api_key" and isinstance(self.base_url, str) and "localhost" in self.base_url:
+            if os.getenv("ENABLE_LOCAL_MODEL_STATUS_CHECK") != "true":
+                return False, "未启用本地模型状态检测"
+
         try:
             # 使用简单的测试文本
             test_text = ["Hello world"]
@@ -104,7 +113,7 @@ class BaseEmbeddingModel(ABC):
         except Exception as e:
             error_msg = str(e)
             error_msg += f", maybe you can check the `{self.base_url}` end with /embeddings as examples."
-            logger.error(error_msg)
+            logger.warning(error_msg)
             return False, error_msg
 
 

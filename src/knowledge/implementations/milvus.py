@@ -59,8 +59,11 @@ class MilvusKB(KnowledgeBase):
         # 元数据锁
         self._metadata_lock = asyncio.Lock()
 
-        # 初始化连接
-        self._init_connection()
+        # 初始化连接（允许在 Milvus 未启动时创建知识库元数据）
+        try:
+            self._init_connection()
+        except Exception as e:
+            logger.warning(f"Milvus 暂不可用（将延迟连接）：{e}")
 
         logger.info("MilvusKB initialized")
 
@@ -133,15 +136,14 @@ class MilvusKB(KnowledgeBase):
 
         except (MilvusException, RuntimeError) as e:
             logger.error(f"Error checking collection {collection_name}: {e}")
-            
+
             # 如果是连接不存在，尝试重连一次
             if isinstance(e, ConnectionNotExistException) or "should create connection first" in str(e):
-                 logger.warning(f"Connection lost during collection check, retrying...")
-                 self._init_connection()
-                 if utility.has_collection(collection_name, using=self.connection_alias):
+                logger.warning("Connection lost during collection check, retrying...")
+                self._init_connection()
+                if utility.has_collection(collection_name, using=self.connection_alias):
                     return Collection(name=collection_name, using=self.connection_alias)
-                 else:
-                    return self._create_new_collection(collection_name, embed_info, db_id)
+                return self._create_new_collection(collection_name, embed_info, db_id)
             raise
         except Exception as e:
             logger.error(f"Unexpected error while managing collection {collection_name}: {e}")

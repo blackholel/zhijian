@@ -143,7 +143,13 @@ async def create_database(
 
         embed_info = config.embed_model_names[embed_model_name]
         database_info = await knowledge_base.create_database(
-            database_name, description, kb_type=kb_type, embed_info=embed_info, llm_info=llm_info, **additional_params
+            database_name,
+            description,
+            kb_type=kb_type,
+            embed_info=embed_info,
+            llm_info=llm_info,
+            owner_user_id=current_user.id,
+            **additional_params,
         )
 
         # 需要重新加载所有智能体，因为工具刷新了

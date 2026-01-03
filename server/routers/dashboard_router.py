@@ -5,8 +5,7 @@ Provides centralized dashboard APIs for monitoring system-wide statistics.
 """
 
 import traceback
-from datetime import datetime, timedelta, timezone
-import os
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -15,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.routers.auth_router import get_admin_user
 from server.utils.auth_middleware import get_db
-from src.config.app import config
 from src.storage.conversation import ConversationManager
 from src.storage.db.models import User
 from src.utils.datetime_utils import UTC, ensure_shanghai, shanghai_now, utc_now
@@ -383,110 +381,82 @@ async def get_knowledge_stats(
 ):
     """Get knowledge base statistics (Admin only)"""
     try:
-        from src.knowledge.manager import KnowledgeBaseManager
-        import json
         import os
 
-        # 从知识库管理系统获取数据
-        kb_dir = os.path.join(config.save_dir, "knowledge_base_data")
-        kb_manager = KnowledgeBaseManager(work_dir=kb_dir)
+        from src.knowledge import knowledge_base
 
-        # 读取全局元数据文件
-        metadata_file = os.path.join(kb_dir, "global_metadata.json")
-        if os.path.exists(metadata_file):
-            with open(metadata_file, encoding="utf-8") as f:
-                global_metadata = json.load(f)
+        databases = knowledge_base.global_databases_meta
+        total_databases = len(databases)
 
-            databases = global_metadata.get("databases", {})
-            total_databases = len(databases)
+        databases_by_type = {}
+        files_by_type = {}
+        total_files = 0
+        total_nodes = 0
+        total_storage_size = 0
 
-            # 统计不同类型的知识库
-            databases_by_type = {}
-            files_by_type = {}
-            total_files = 0
-            total_nodes = 0
-            total_storage_size = 0
+        file_type_mapping = {
+            "txt": "文本文件",
+            "pdf": "PDF文档",
+            "docx": "Word文档",
+            "doc": "Word文档",
+            "md": "Markdown",
+            "html": "HTML网页",
+            "htm": "HTML网页",
+            "json": "JSON数据",
+            "csv": "CSV表格",
+            "xlsx": "Excel表格",
+            "xls": "Excel表格",
+            "pptx": "PowerPoint",
+            "ppt": "PowerPoint",
+            "png": "PNG图片",
+            "jpg": "JPEG图片",
+            "jpeg": "JPEG图片",
+            "gif": "GIF图片",
+            "svg": "SVG图片",
+            "mp4": "MP4视频",
+            "mp3": "MP3音频",
+            "zip": "ZIP压缩包",
+            "rar": "RAR压缩包",
+            "7z": "7Z压缩包",
+        }
 
-            # 文件类型映射到中文友好名称
-            file_type_mapping = {
-                "txt": "文本文件",
-                "pdf": "PDF文档",
-                "docx": "Word文档",
-                "doc": "Word文档",
-                "md": "Markdown",
-                "html": "HTML网页",
-                "htm": "HTML网页",
-                "json": "JSON数据",
-                "csv": "CSV表格",
-                "xlsx": "Excel表格",
-                "xls": "Excel表格",
-                "pptx": "PowerPoint",
-                "ppt": "PowerPoint",
-                "png": "PNG图片",
-                "jpg": "JPEG图片",
-                "jpeg": "JPEG图片",
-                "gif": "GIF图片",
-                "svg": "SVG图片",
-                "mp4": "MP4视频",
-                "mp3": "MP3音频",
-                "zip": "ZIP压缩包",
-                "rar": "RAR压缩包",
-                "7z": "7Z压缩包",
-            }
+        for kb_instance in knowledge_base.kb_instances.values():
+            files_meta = getattr(kb_instance, "files_meta", {}) or {}
+            total_files += len(files_meta)
 
-            # 统计文件：改为基于各知识库实现中的 files_meta，更加准确
-            # 注意：部分记录可能来源于 URL，此时无法统计物理大小
-            for kb_instance in kb_manager.kb_instances.values():
-                files_meta = getattr(kb_instance, "files_meta", {}) or {}
-                total_files += len(files_meta)
+            for _fid, finfo in files_meta.items():
+                file_ext = (finfo.get("file_type") or "").lower()
+                display_name = file_type_mapping.get(file_ext, file_ext.upper() + "文件" if file_ext else "其他")
+                files_by_type[display_name] = files_by_type.get(display_name, 0) + 1
 
-                for _fid, finfo in files_meta.items():
-                    file_ext = (finfo.get("file_type") or "").lower()
-                    # 统一映射显示名
-                    display_name = file_type_mapping.get(file_ext, file_ext.upper() + "文件" if file_ext else "其他")
-                    files_by_type[display_name] = files_by_type.get(display_name, 0) + 1
-
-                    # 估算大小（如果路径存在且是本地文件）
-                    path = finfo.get("path") or ""
-                    try:
-                        if path and os.path.exists(path) and os.path.isfile(path):
-                            total_storage_size += os.path.getsize(path)
-                    except Exception:
-                        # 忽略无法访问的路径
-                        pass
-
-            # 统计知识库类型分布
-            for kb_id, kb_info in databases.items():
-                kb_type = kb_info.get("kb_type", "unknown")
-                display_type = {
-                    "lightrag": "LightRAG",
-                    "chroma": "Chroma",
-                    "faiss": "FAISS",
-                    "milvus": "Milvus",
-                    "qdrant": "Qdrant",
-                    "elasticsearch": "Elasticsearch",
-                    "unknown": "未知类型",
-                }.get(kb_type.lower(), kb_type)
-                databases_by_type[display_type] = databases_by_type.get(display_type, 0) + 1
-
-                # 尝试从各个知识库系统获取更详细的统计
+                path = finfo.get("path") or ""
                 try:
-                    kb_instance = kb_manager.get_kb(kb_id)
-                    if kb_instance and hasattr(kb_instance, "get_stats"):
-                        stats = kb_instance.get_stats()
-                        total_nodes += stats.get("node_count", 0)
-                except Exception as e:
-                    logger.warning(f"Failed to get stats for KB {kb_id}: {e}")
-                    continue
+                    if path and os.path.exists(path) and os.path.isfile(path):
+                        total_storage_size += os.path.getsize(path)
+                except Exception:
+                    pass
 
-        else:
-            # 如果没有元数据文件，返回空数据
-            total_databases = 0
-            total_files = 0
-            total_nodes = 0
-            total_storage_size = 0
-            databases_by_type = {}
-            files_by_type = {}
+        for kb_id, kb_info in databases.items():
+            kb_type = kb_info.get("kb_type", "unknown")
+            display_type = {
+                "lightrag": "LightRAG",
+                "chroma": "Chroma",
+                "faiss": "FAISS",
+                "milvus": "Milvus",
+                "qdrant": "Qdrant",
+                "elasticsearch": "Elasticsearch",
+                "unknown": "未知类型",
+            }.get(kb_type.lower(), kb_type)
+            databases_by_type[display_type] = databases_by_type.get(display_type, 0) + 1
+
+            try:
+                kb_instance = knowledge_base.get_kb(kb_id)
+                if kb_instance and hasattr(kb_instance, "get_stats"):
+                    stats = kb_instance.get_stats()
+                    total_nodes += stats.get("node_count", 0)
+            except Exception as e:
+                logger.warning(f"Failed to get stats for KB {kb_id}: {e}")
+                continue
 
         return KnowledgeStats(
             total_databases=total_databases,
@@ -817,7 +787,6 @@ async def get_call_timeseries_stats(
             intervals = 14
             # 包含当前小时：从13小时前开始
             start_time = now - timedelta(hours=intervals - 1)
-            group_format_col = Message.created_at  # Placeholder
             base_local_time = ensure_shanghai(start_time)
         elif time_range == "14weeks":
             intervals = 14
@@ -826,13 +795,11 @@ async def get_call_timeseries_stats(
             local_start = local_start - timedelta(days=local_start.weekday())
             local_start = local_start.replace(hour=0, minute=0, second=0, microsecond=0)
             start_time = local_start.astimezone(UTC)
-            group_format_col = Message.created_at  # Placeholder
             base_local_time = local_start
         else:  # 14days (default)
             intervals = 14
             # 包含当前天：从13天前开始
             start_time = now - timedelta(days=intervals - 1)
-            group_format_col = Message.created_at  # Placeholder
             base_local_time = ensure_shanghai(start_time)
 
         # 根据类型查询数据
@@ -856,7 +823,7 @@ async def get_call_timeseries_stats(
         elif type == "agents":
             group_format = get_date_group_expression(Conversation.updated_at, time_range)
             # 智能体调用统计（基于对话更新时间，按智能体分组）
-            
+
             query_result = await db.execute(
                 select(
                     group_format.label("date"),
@@ -899,7 +866,7 @@ async def get_call_timeseries_stats(
 
             # 查询output tokens
             output_tokens_expr = get_json_field(Message.extra_metadata, "$.usage_metadata.output_tokens", Integer)
-            
+
             output_query_result = await db.execute(
                 select(
                     group_format.label("date"),
@@ -926,7 +893,7 @@ async def get_call_timeseries_stats(
             # 工具调用统计（按工具名称分组）
             # Handle naive datetime for ToolCall
             start_time_naive = start_time.replace(tzinfo=None)
-            
+
             group_format = get_date_group_expression(ToolCall.created_at, time_range)
 
             query_result = await db.execute(

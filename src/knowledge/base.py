@@ -1,7 +1,4 @@
-import json
 import os
-import shutil
-import tempfile
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -156,6 +153,9 @@ class KnowledgeBase(ABC):
         # 创建数据库记录
         # 确保 Pydantic 模型被转换为字典，以便 JSON 序列化
         embed_info_dump = embed_info.model_dump() if hasattr(embed_info, "model_dump") else embed_info
+        if isinstance(embed_info_dump, dict) and isinstance(embed_info_dump.get("base_url"), str):
+            embed_info_dump = dict(embed_info_dump)
+            embed_info_dump["base_url"] = embed_info_dump["base_url"].strip().replace("`", "")
         self.databases_meta[db_id] = {
             "name": database_name,
             "description": description,
@@ -653,40 +653,62 @@ class KnowledgeBase(ABC):
         return retrievers
 
     def _load_metadata(self):
-        """加载元数据"""
-        meta_file = os.path.join(self.work_dir, f"metadata_{self.kb_type}.json")
+        from sqlalchemy import select
 
-        if os.path.exists(meta_file):
-            try:
-                with open(meta_file, encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.databases_meta = data.get("databases", {})
-                    self.files_meta = data.get("files", {})
-                    self.benchmarks_meta = data.get("benchmarks", {})
-                logger.info(f"Loaded {self.kb_type} metadata for {len(self.databases_meta)} databases")
-            except Exception as e:
-                logger.error(f"Failed to load {self.kb_type} metadata: {e}")
-                # 尝试从备份恢复
-                backup_file = f"{meta_file}.backup"
-                if os.path.exists(backup_file):
-                    try:
-                        with open(backup_file, encoding="utf-8") as f:
-                            data = json.load(f)
-                            self.databases_meta = data.get("databases", {})
-                            self.files_meta = data.get("files", {})
-                            self.benchmarks_meta = data.get("benchmarks", {})
-                        logger.info(f"Loaded {self.kb_type} metadata from backup")
-                        # 恢复备份文件
-                        shutil.copy2(backup_file, meta_file)
-                        return
-                    except Exception as backup_e:
-                        logger.error(f"Failed to load backup: {backup_e}")
+        from src.storage.db.manager import db_manager
+        from src.storage.db.models import KnowledgeDatabase, KnowledgeFile
 
-                # 如果加载失败，初始化为空状态
-                logger.warning(f"Initializing empty {self.kb_type} metadata")
-                self.databases_meta = {}
-                self.files_meta = {}
-                self.benchmarks_meta = {}
+        self.databases_meta = {}
+        self.files_meta = {}
+        self.benchmarks_meta = {}
+
+        with db_manager.get_session_context() as db:
+            databases = (
+                db.execute(
+                    select(KnowledgeDatabase).where(
+                        KnowledgeDatabase.kb_type == self.kb_type,
+                        KnowledgeDatabase.deleted_at.is_(None),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            db_ids = [row.db_id for row in databases]
+            files = []
+            if db_ids:
+                files = db.execute(select(KnowledgeFile).where(KnowledgeFile.db_id.in_(db_ids))).scalars().all()
+            for row in databases:
+                created_at = self._normalize_timestamp(row.created_at)
+                self.databases_meta[row.db_id] = {
+                    "name": row.name,
+                    "description": row.description or "",
+                    "kb_type": row.kb_type,
+                    "embed_info": row.embed_info,
+                    "llm_info": row.llm_info,
+                    "metadata": row.kb_metadata or {},
+                    "created_at": created_at,
+                }
+                global_meta = dict(row.global_meta or {})
+                self.benchmarks_meta[row.db_id] = dict(global_meta.get("benchmarks") or {})
+
+            for row in files:
+                created_at = self._normalize_timestamp(row.created_at)
+                self.files_meta[row.file_id] = {
+                    "database_id": row.db_id,
+                    "filename": row.filename or "",
+                    "path": row.path,
+                    "file_type": row.file_type,
+                    "status": row.status,
+                    "created_at": created_at,
+                    "content_hash": row.content_hash,
+                    "parent_id": row.parent_id,
+                    "processing_params": row.processing_params,
+                    "file_id": row.file_id,
+                    "is_folder": bool(row.is_folder),
+                }
+
+        logger.info(f"Loaded {self.kb_type} metadata for {len(self.databases_meta)} databases from database")
 
     def _serialize_metadata(self, obj):
         """递归序列化元数据中的 Pydantic 模型"""
@@ -700,42 +722,64 @@ class KnowledgeBase(ABC):
             return obj
 
     def _save_metadata(self):
-        """保存元数据"""
+        from sqlalchemy import delete, select
+
+        from src.storage.db.manager import db_manager
+        from src.storage.db.models import KnowledgeDatabase, KnowledgeFile
+
         self._normalize_metadata_state()
-        meta_file = os.path.join(self.work_dir, f"metadata_{self.kb_type}.json")
-        backup_file = f"{meta_file}.backup"
+        serialized_databases = self._serialize_metadata(self.databases_meta)
+        serialized_files = self._serialize_metadata(self.files_meta)
+        serialized_benchmarks = self._serialize_metadata(self.benchmarks_meta)
 
-        try:
-            # 创建简单备份
-            if os.path.exists(meta_file):
-                shutil.copy2(meta_file, backup_file)
+        with db_manager.get_session_context() as db:
+            for db_id, meta in serialized_databases.items():
+                row = (
+                    db.execute(select(KnowledgeDatabase).where(KnowledgeDatabase.db_id == db_id))
+                    .scalars()
+                    .one_or_none()
+                )
+                if row is None:
+                    row = KnowledgeDatabase(db_id=db_id, kb_type=self.kb_type, name=meta.get("name") or "")
+                    db.add(row)
 
-            # 准备数据并序列化 Pydantic 模型
-            data = {
-                "databases": self._serialize_metadata(self.databases_meta),
-                "files": self._serialize_metadata(self.files_meta),
-                "benchmarks": self._serialize_metadata(self.benchmarks_meta),
-                "kb_type": self.kb_type,
-                "updated_at": utc_isoformat(),
-            }
+                row.name = meta.get("name") or ""
+                row.description = meta.get("description") or ""
+                row.kb_type = meta.get("kb_type") or self.kb_type
+                owner_user_id = (meta.get("metadata") or {}).get("owner_user_id")
+                if owner_user_id is not None:
+                    row.owner_user_id = int(owner_user_id)
+                row.embed_info = meta.get("embed_info")
+                row.llm_info = meta.get("llm_info")
+                row.kb_metadata = meta.get("metadata") or {}
 
-            # 原子性写入（使用临时文件）
-            with tempfile.NamedTemporaryFile(
-                mode="w", dir=os.path.dirname(meta_file), prefix=".tmp_", suffix=".json", delete=False
-            ) as tmp_file:
-                json.dump(data, tmp_file, ensure_ascii=False, indent=2)
-                temp_path = tmp_file.name
+                global_meta = dict(row.global_meta or {})
+                global_meta["benchmarks"] = dict(serialized_benchmarks.get(db_id) or {})
+                row.global_meta = global_meta
 
-            os.replace(temp_path, meta_file)
-            logger.debug(f"Saved {self.kb_type} metadata")
+            for file_id, finfo in serialized_files.items():
+                row = db.execute(select(KnowledgeFile).where(KnowledgeFile.file_id == file_id)).scalars().one_or_none()
+                if row is None:
+                    row = KnowledgeFile(file_id=file_id, db_id=finfo.get("database_id") or "")
+                    db.add(row)
+                row.db_id = finfo.get("database_id") or row.db_id
+                row.filename = finfo.get("filename") or ""
+                row.path = finfo.get("path")
+                row.file_type = finfo.get("file_type")
+                row.status = finfo.get("status")
+                row.content_hash = finfo.get("content_hash")
+                row.parent_id = finfo.get("parent_id")
+                row.processing_params = finfo.get("processing_params")
+                row.is_folder = bool(finfo.get("is_folder"))
 
-        except Exception as e:
-            logger.error(f"Failed to save {self.kb_type} metadata: {e}")
-            # 尝试恢复备份
-            if os.path.exists(backup_file):
-                try:
-                    shutil.copy2(backup_file, meta_file)
-                    logger.info("Restored metadata from backup")
-                except Exception as restore_e:
-                    logger.error(f"Failed to restore backup: {restore_e}")
-            raise e
+            db_ids = list(serialized_databases.keys())
+            if db_ids:
+                keep_file_ids = set(serialized_files.keys())
+                existing_file_ids = (
+                    db.execute(select(KnowledgeFile.file_id).where(KnowledgeFile.db_id.in_(db_ids))).scalars().all()
+                )
+                to_delete = [fid for fid in existing_file_ids if fid not in keep_file_ids]
+                if to_delete:
+                    db.execute(delete(KnowledgeFile).where(KnowledgeFile.file_id.in_(to_delete)))
+
+        logger.debug(f"Saved {self.kb_type} metadata to database")
