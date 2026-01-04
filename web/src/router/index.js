@@ -27,6 +27,20 @@ const router = createRouter({
       meta: { requiresAuth: false }
     },
     {
+      path: '/chat',
+      name: 'chat',
+      component: AppLayout,
+      meta: { requiresAuth: true },
+      children: [
+        {
+          path: ':agent_id',
+          name: 'ChatAgentComp',
+          component: () => import('../views/AgentSingleView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        }
+      ]
+    },
+    {
       path: '/agent',
       name: 'AgentMain',
       component: AppLayout,
@@ -42,7 +56,7 @@ const router = createRouter({
     {
       path: '/agent/:agent_id',
       name: 'AgentSinglePage',
-      component: () => import('../views/AgentSingleView.vue'),
+      redirect: (to) => `/chat/${to.params.agent_id}`,
       meta: { requiresAuth: true }
     },
     {
@@ -67,13 +81,13 @@ const router = createRouter({
           path: '',
           name: 'DatabaseComp',
           component: () => import('../views/DataBaseView.vue'),
-          meta: { keepAlive: true, requiresAuth: true, requiresAdmin: true }
+          meta: { keepAlive: true, requiresAuth: true }
         },
         {
           path: ':database_id',
           name: 'DatabaseInfoComp',
           component: () => import('../views/DataBaseInfoView.vue'),
-          meta: { keepAlive: false, requiresAuth: true, requiresAdmin: true }
+          meta: { keepAlive: false, requiresAuth: true }
         }
       ]
     },
@@ -117,6 +131,26 @@ router.beforeEach(async (to, from, next) => {
     return;
   }
 
+  if (to.path === '/chat' || to.path === '/chat/') {
+    try {
+      const agentStore = useAgentStore();
+      if (!agentStore.isInitialized) {
+        await agentStore.initialize();
+      }
+
+      const defaultAgent = agentStore.defaultAgent;
+      if (defaultAgent && defaultAgent.id) {
+        next(`/chat/${defaultAgent.id}`);
+      } else {
+        next('/');
+      }
+    } catch (error) {
+      console.error('获取智能体信息失败:', error);
+      next('/');
+    }
+    return;
+  }
+
   // 如果路由需要管理员权限但用户不是管理员
   if (requiresAdmin && !isAdmin) {
     // 如果是普通用户，跳转到默认智能体页面
@@ -129,12 +163,12 @@ router.beforeEach(async (to, from, next) => {
 
       const defaultAgent = agentStore.defaultAgent;
       if (defaultAgent && defaultAgent.id) {
-        next(`/agent/${defaultAgent.id}`);
+        next(`/chat/${defaultAgent.id}`);
       } else {
         // 如果没有默认智能体，可以考虑跳转到第一个可用的智能体，或者一个特定的页面
-        const agentIds = Object.keys(agentStore.agents);
+        const agentIds = (agentStore.agents || []).map(a => a.id).filter(Boolean);
         if (agentIds.length > 0) {
-          next(`/agent/${agentIds[0]}`);
+          next(`/chat/${agentIds[0]}`);
         } else {
           // 没有可用的智能体，跳转到首页
           next('/');

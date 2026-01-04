@@ -61,7 +61,7 @@
 <script setup>
 import { ref, computed, reactive, watch } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import { message } from 'ant-design-vue'
+import { message as antMessage } from 'ant-design-vue'
 import {
   ThumbsUp,
   ThumbsDown,
@@ -136,18 +136,18 @@ const copyText = async (text) => {
   if (isSupported) {
     try {
       await copy(text)
-      message.success('文本已复制到剪贴板')
+      antMessage.success('文本已复制到剪贴板')
       isCopied.value = true
       setTimeout(() => {
         isCopied.value = false
       }, 2000)
     } catch (error) {
       console.error('复制失败:', error)
-      message.error('复制失败，请手动复制')
+      antMessage.error('复制失败，请手动复制')
     }
   } else {
     console.warn('浏览器不支持自动复制')
-    message.warning('浏览器不支持自动复制，请手动复制')
+    antMessage.warning('浏览器不支持自动复制，请手动复制')
   }
 }
 
@@ -181,12 +181,12 @@ const getModelName = (msg) => {
 // Handle like action
 const likeThisResponse = async (msg) => {
   if (feedbackState.hasSubmitted) {
-    message.info('您已经提交过反馈了')
+    antMessage.info('您已经提交过反馈了')
     return
   }
 
   if (!msg?.id) {
-    message.error('无法提交反馈：消息ID不存在')
+    antMessage.error('无法提交反馈：消息ID不存在')
     console.error('Message object:', msg)
     return
   }
@@ -198,14 +198,14 @@ const likeThisResponse = async (msg) => {
     feedbackState.hasSubmitted = true
     feedbackState.rating = 'like'
 
-    message.success('感谢您的反馈！')
+    antMessage.success('感谢您的反馈！')
   } catch (error) {
     console.error('Failed to submit like feedback:', error)
     if (error.message?.includes('already submitted')) {
-      message.info('您已经提交过反馈了')
+      antMessage.info('您已经提交过反馈了')
       feedbackState.hasSubmitted = true
     } else {
-      message.error('提交反馈失败，请稍后重试')
+      antMessage.error('提交反馈失败，请稍后重试')
     }
   } finally {
     submittingFeedback.value = false
@@ -215,12 +215,12 @@ const likeThisResponse = async (msg) => {
 // Handle dislike action
 const dislikeThisResponse = async (msg) => {
   if (feedbackState.hasSubmitted) {
-    message.info('您已经提交过反馈了')
+    antMessage.info('您已经提交过反馈了')
     return
   }
 
   if (!msg?.id) {
-    message.error('无法提交反馈：消息ID不存在')
+    antMessage.error('无法提交反馈：消息ID不存在')
     console.error('Message object:', msg)
     return
   }
@@ -246,15 +246,15 @@ const submitDislikeFeedback = async () => {
     dislikeModalVisible.value = false
     dislikeReason.value = ''
 
-    message.success('感谢您的反馈！')
+    antMessage.success('感谢您的反馈！')
   } catch (error) {
     console.error('Failed to submit dislike feedback:', error)
     if (error.message?.includes('already submitted')) {
-      message.info('您已经提交过反馈了')
+      antMessage.info('您已经提交过反馈了')
       feedbackState.hasSubmitted = true
       dislikeModalVisible.value = false
     } else {
-      message.error('提交反馈失败，请稍后重试')
+      antMessage.error('提交反馈失败，请稍后重试')
     }
   } finally {
     submittingFeedback.value = false

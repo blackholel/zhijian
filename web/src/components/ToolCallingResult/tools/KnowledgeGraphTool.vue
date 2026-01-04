@@ -7,7 +7,7 @@
         <span class="description">{{ query }}</span>
       </div>
     </template>
-    <template #result="{ resultContent }">
+    <template #result>
       <div class="knowledge-graph-result">
         <div class="result-summary">
           找到 {{ totalNodes }} 个节点, {{ totalRelations }} 个关系

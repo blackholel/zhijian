@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from starlette.responses import StreamingResponse
 
 from src.storage.db.models import User
-from server.utils.auth_middleware import get_admin_user
+from server.utils.auth_middleware import get_admin_user, get_required_user
 from server.services.tasker import TaskContext, tasker
 from src import config, knowledge_base
 from src.knowledge.indexing import SUPPORTED_FILE_EXTENSIONS, is_supported_file_extension, process_file_to_markdown
@@ -57,17 +57,53 @@ media_types = {
     ".hpp": "text/x-c++hdr",
 }
 
+
+def _is_admin_user(user: User) -> bool:
+    return user.role in ["admin", "superadmin"]
+
+
+def _get_db_owner_user_id(db_info: dict | None) -> int | None:
+    if not db_info:
+        return None
+    owner_user_id = (db_info.get("metadata") or {}).get("owner_user_id")
+    if owner_user_id is None:
+        return None
+    try:
+        return int(owner_user_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ensure_user_can_access_database(db_id: str, current_user: User) -> None:
+    if _is_admin_user(current_user):
+        return
+    db_info = knowledge_base.get_database_info(db_id)
+    if db_info is None:
+        raise HTTPException(status_code=404, detail="Database not found")
+    owner_user_id = _get_db_owner_user_id(db_info)
+    if owner_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权限访问该知识库")
+
+
 # =============================================================================
 # === 数据库管理分组 ===
 # =============================================================================
 
 
 @knowledge.get("/databases")
-async def get_databases(current_user: User = Depends(get_admin_user)):
+async def get_databases(current_user: User = Depends(get_required_user)):
     """获取所有知识库"""
     try:
         database = knowledge_base.get_databases()
-        return database
+        if _is_admin_user(current_user):
+            return database
+        databases = database.get("databases") or []
+        filtered = []
+        for db in databases:
+            owner_user_id = _get_db_owner_user_id(db)
+            if owner_user_id == current_user.id:
+                filtered.append(db)
+        return {"databases": filtered}
     except Exception as e:
         logger.error(f"获取数据库列表失败 {e}, {traceback.format_exc()}")
         return {"message": f"获取数据库列表失败 {e}", "databases": []}
@@ -81,7 +117,7 @@ async def create_database(
     kb_type: str = Body("lightrag"),
     additional_params: dict = Body({}),
     llm_info: dict = Body(None),
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
     """创建知识库"""
     logger.debug(
@@ -164,8 +200,9 @@ async def create_database(
 
 
 @knowledge.get("/databases/{db_id}")
-async def get_database_info(db_id: str, current_user: User = Depends(get_admin_user)):
+async def get_database_info(db_id: str, current_user: User = Depends(get_required_user)):
     """获取知识库详细信息"""
+    _ensure_user_can_access_database(db_id, current_user)
     database = knowledge_base.get_database_info(db_id)
     if database is None:
         raise HTTPException(status_code=404, detail="Database not found")
@@ -179,9 +216,10 @@ async def update_database_info(
     description: str = Body(...),
     llm_info: dict = Body(None),
     additional_params: dict = Body({}),  # Now accepts a dict
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
     """更新知识库信息"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(
         f"Update database {db_id} info: {name}, {description}, llm_info: {llm_info}, "
         f"additional_params: {additional_params}"
@@ -201,8 +239,9 @@ async def update_database_info(
 
 
 @knowledge.delete("/databases/{db_id}")
-async def delete_database(db_id: str, current_user: User = Depends(get_admin_user)):
+async def delete_database(db_id: str, current_user: User = Depends(get_required_user)):
     """删除知识库"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"Delete database {db_id}")
     try:
         await knowledge_base.delete_database(db_id)
@@ -223,9 +262,10 @@ async def export_database(
     db_id: str,
     format: str = Query("csv", enum=["csv", "xlsx", "md", "txt"]),
     include_vectors: bool = Query(False, description="是否在导出中包含向量数据"),
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
     """导出知识库数据"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"Exporting database {db_id} with format {format}")
     try:
         file_path = await knowledge_base.export_data(db_id, format=format, include_vectors=include_vectors)
@@ -251,9 +291,10 @@ async def export_database(
 
 @knowledge.post("/databases/{db_id}/documents")
 async def add_documents(
-    db_id: str, items: list[str] = Body(...), params: dict = Body(...), current_user: User = Depends(get_admin_user)
+    db_id: str, items: list[str] = Body(...), params: dict = Body(...), current_user: User = Depends(get_required_user)
 ):
     """添加文档到知识库"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"Add documents for db_id {db_id}: {items} {params=}")
 
     content_type = params.get("content_type", "file")
@@ -360,8 +401,9 @@ async def add_documents(
 
 
 @knowledge.get("/databases/{db_id}/documents/{doc_id}")
-async def get_document_info(db_id: str, doc_id: str, current_user: User = Depends(get_admin_user)):
+async def get_document_info(db_id: str, doc_id: str, current_user: User = Depends(get_required_user)):
     """获取文档详细信息（包含基本信息和内容信息）"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"GET document {doc_id} info in {db_id}")
 
     try:
@@ -373,8 +415,9 @@ async def get_document_info(db_id: str, doc_id: str, current_user: User = Depend
 
 
 @knowledge.get("/databases/{db_id}/documents/{doc_id}/basic")
-async def get_document_basic_info(db_id: str, doc_id: str, current_user: User = Depends(get_admin_user)):
+async def get_document_basic_info(db_id: str, doc_id: str, current_user: User = Depends(get_required_user)):
     """获取文档基本信息（仅元数据）"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"GET document {doc_id} basic info in {db_id}")
 
     try:
@@ -386,8 +429,9 @@ async def get_document_basic_info(db_id: str, doc_id: str, current_user: User = 
 
 
 @knowledge.get("/databases/{db_id}/documents/{doc_id}/content")
-async def get_document_content(db_id: str, doc_id: str, current_user: User = Depends(get_admin_user)):
+async def get_document_content(db_id: str, doc_id: str, current_user: User = Depends(get_required_user)):
     """获取文档内容信息（chunks和lines）"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"GET document {doc_id} content in {db_id}")
 
     try:
@@ -399,8 +443,9 @@ async def get_document_content(db_id: str, doc_id: str, current_user: User = Dep
 
 
 @knowledge.delete("/databases/{db_id}/documents/{doc_id}")
-async def delete_document(db_id: str, doc_id: str, current_user: User = Depends(get_admin_user)):
+async def delete_document(db_id: str, doc_id: str, current_user: User = Depends(get_required_user)):
     """删除文档或文件夹"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"DELETE document {doc_id} info in {db_id}")
     try:
         file_meta_info = await knowledge_base.get_file_basic_info(db_id, doc_id)
@@ -431,9 +476,13 @@ async def delete_document(db_id: str, doc_id: str, current_user: User = Depends(
 
 @knowledge.post("/databases/{db_id}/documents/rechunks")
 async def rechunks_documents(
-    db_id: str, file_ids: list[str] = Body(...), params: dict = Body(...), current_user: User = Depends(get_admin_user)
+    db_id: str,
+    file_ids: list[str] = Body(...),
+    params: dict = Body(...),
+    current_user: User = Depends(get_required_user),
 ):
     """重新分块文档"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"Rechunks documents for db_id {db_id}: {file_ids} {params=}")
 
     async def run_rechunks(context: TaskContext):
@@ -536,8 +585,9 @@ async def rechunks_documents(
 
 
 @knowledge.get("/databases/{db_id}/documents/{doc_id}/download")
-async def download_document(db_id: str, doc_id: str, request: Request, current_user: User = Depends(get_admin_user)):
+async def download_document(db_id: str, doc_id: str, request: Request, current_user: User = Depends(get_required_user)):
     """下载原始文件 - 根据path类型选择本地或MinIO下载"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"Download document {doc_id} from {db_id}")
     try:
         file_info = await knowledge_base.get_file_basic_info(db_id, doc_id)
@@ -671,9 +721,10 @@ async def download_document(db_id: str, doc_id: str, request: Request, current_u
 
 @knowledge.post("/databases/{db_id}/query")
 async def query_knowledge_base(
-    db_id: str, query: str = Body(...), meta: dict = Body(...), current_user: User = Depends(get_admin_user)
+    db_id: str, query: str = Body(...), meta: dict = Body(...), current_user: User = Depends(get_required_user)
 ):
     """查询知识库"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"Query knowledge base {db_id}: {query}")
     try:
         result = await knowledge_base.aquery(query, db_id=db_id, **meta)
@@ -685,9 +736,10 @@ async def query_knowledge_base(
 
 @knowledge.post("/databases/{db_id}/query-test")
 async def query_test(
-    db_id: str, query: str = Body(...), meta: dict = Body(...), current_user: User = Depends(get_admin_user)
+    db_id: str, query: str = Body(...), meta: dict = Body(...), current_user: User = Depends(get_required_user)
 ):
     """测试查询知识库"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"Query test in {db_id}: {query}")
     try:
         result = await knowledge_base.aquery(query, db_id=db_id, **meta)
@@ -699,9 +751,10 @@ async def query_test(
 
 @knowledge.put("/databases/{db_id}/query-params")
 async def update_knowledge_base_query_params(
-    db_id: str, params: dict = Body(...), current_user: User = Depends(get_admin_user)
+    db_id: str, params: dict = Body(...), current_user: User = Depends(get_required_user)
 ):
     """更新知识库查询参数配置"""
+    _ensure_user_can_access_database(db_id, current_user)
     try:
         # 获取知识库实例
         kb_instance = knowledge_base.get_kb(db_id)
@@ -736,8 +789,9 @@ async def update_knowledge_base_query_params(
 
 
 @knowledge.get("/databases/{db_id}/query-params")
-async def get_knowledge_base_query_params(db_id: str, current_user: User = Depends(get_admin_user)):
+async def get_knowledge_base_query_params(db_id: str, current_user: User = Depends(get_required_user)):
     """获取知识库类型特定的查询参数"""
+    _ensure_user_can_access_database(db_id, current_user)
     try:
         # 获取数据库信息
         db_info = knowledge_base.get_database_info(db_id)
@@ -1002,7 +1056,7 @@ SAMPLE_QUESTIONS_SYSTEM_PROMPT = """你是一个专业的知识库问答测试�
 async def generate_sample_questions(
     db_id: str,
     request_body: dict = Body(...),
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
     """
     AI生成针对知识库的测试问题
@@ -1014,6 +1068,7 @@ async def generate_sample_questions(
     Returns:
         生成的问题列表
     """
+    _ensure_user_can_access_database(db_id, current_user)
     try:
         from src.models import select_model
         import json
@@ -1126,7 +1181,7 @@ async def generate_sample_questions(
 
 
 @knowledge.get("/databases/{db_id}/sample-questions")
-async def get_sample_questions(db_id: str, current_user: User = Depends(get_admin_user)):
+async def get_sample_questions(db_id: str, current_user: User = Depends(get_required_user)):
     """
     获取知识库的测试问题
 
@@ -1136,6 +1191,7 @@ async def get_sample_questions(db_id: str, current_user: User = Depends(get_admi
     Returns:
         问题列表
     """
+    _ensure_user_can_access_database(db_id, current_user)
     try:
         # 直接从全局元数据中读取
         if db_id not in knowledge_base.global_databases_meta:
@@ -1168,9 +1224,10 @@ async def create_folder(
     db_id: str,
     folder_name: str = Body(..., embed=True),
     parent_id: str | None = Body(None, embed=True),
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
     """创建文件夹"""
+    _ensure_user_can_access_database(db_id, current_user)
     try:
         return await knowledge_base.create_folder(db_id, folder_name, parent_id)
     except Exception as e:
@@ -1183,9 +1240,10 @@ async def move_document(
     db_id: str,
     doc_id: str,
     new_parent_id: str | None = Body(..., embed=True),
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
     """移动文件或文件夹"""
+    _ensure_user_can_access_database(db_id, current_user)
     logger.debug(f"Move document {doc_id} to {new_parent_id} in {db_id}")
     try:
         return await knowledge_base.move_file(db_id, doc_id, new_parent_id)
@@ -1201,11 +1259,14 @@ async def upload_file(
     file: UploadFile = File(...),
     db_id: str | None = Query(None),
     allow_jsonl: bool = Query(False),
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
     """上传文件"""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No selected file")
+
+    if db_id:
+        _ensure_user_can_access_database(db_id, current_user)
 
     logger.debug(f"Received upload file with filename: {file.filename}")
 
@@ -1267,7 +1328,7 @@ async def upload_file(
 
 
 @knowledge.get("/files/supported-types")
-async def get_supported_file_types(current_user: User = Depends(get_admin_user)):
+async def get_supported_file_types(current_user: User = Depends(get_required_user)):
     """获取当前支持的文件类型"""
     return {"message": "success", "file_types": sorted(SUPPORTED_FILE_EXTENSIONS)}
 
@@ -1290,7 +1351,7 @@ async def mark_it_down(file: UploadFile = File(...), current_user: User = Depend
 
 
 @knowledge.get("/types")
-async def get_knowledge_base_types(current_user: User = Depends(get_admin_user)):
+async def get_knowledge_base_types(current_user: User = Depends(get_required_user)):
     """获取支持的知识库类型"""
     try:
         kb_types = knowledge_base.get_supported_kb_types()
@@ -1301,7 +1362,7 @@ async def get_knowledge_base_types(current_user: User = Depends(get_admin_user))
 
 
 @knowledge.get("/stats")
-async def get_knowledge_base_statistics(current_user: User = Depends(get_admin_user)):
+async def get_knowledge_base_statistics(current_user: User = Depends(get_required_user)):
     """获取知识库统计信息"""
     try:
         stats = knowledge_base.get_statistics()
@@ -1317,7 +1378,7 @@ async def get_knowledge_base_statistics(current_user: User = Depends(get_admin_u
 
 
 @knowledge.get("/embedding-models/{model_id}/status")
-async def get_embedding_model_status(model_id: str, current_user: User = Depends(get_admin_user)):
+async def get_embedding_model_status(model_id: str, current_user: User = Depends(get_required_user)):
     """获取指定embedding模型的状态"""
     logger.debug(f"Checking embedding model status: {model_id}")
     try:
@@ -1332,7 +1393,7 @@ async def get_embedding_model_status(model_id: str, current_user: User = Depends
 
 
 @knowledge.get("/embedding-models/status")
-async def get_all_embedding_models_status(current_user: User = Depends(get_admin_user)):
+async def get_all_embedding_models_status(current_user: User = Depends(get_required_user)):
     """获取所有embedding模型的状态"""
     logger.debug("Checking all embedding models status")
     try:
@@ -1352,7 +1413,7 @@ async def get_all_embedding_models_status(current_user: User = Depends(get_admin
 async def generate_description(
     name: str = Body(..., description="知识库名称"),
     current_description: str = Body("", description="当前描述（可选，用于优化）"),
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
     """使用 LLM 生成或优化知识库描述
 

@@ -35,7 +35,7 @@ async def test_admin_can_manage_knowledge_databases(test_client, admin_headers, 
 async def test_knowledge_routes_enforce_permissions(test_client, standard_user, knowledge_database):
     db_id = knowledge_database["db_id"]
 
-    forbidden_create = await test_client.post(
+    create_response = await test_client.post(
         "/api/knowledge/databases",
         json={
             "database_name": "unauthorized_db",
@@ -44,10 +44,19 @@ async def test_knowledge_routes_enforce_permissions(test_client, standard_user, 
         },
         headers=standard_user["headers"],
     )
-    assert forbidden_create.status_code == 403
+    assert create_response.status_code == 200, create_response.text
+    created_db_id = create_response.json()["db_id"]
 
-    forbidden_list = await test_client.get("/api/knowledge/databases", headers=standard_user["headers"])
-    assert forbidden_list.status_code == 403
+    list_response = await test_client.get("/api/knowledge/databases", headers=standard_user["headers"])
+    assert list_response.status_code == 200, list_response.text
+    databases = list_response.json().get("databases", [])
+    assert any(entry["db_id"] == created_db_id for entry in databases)
+    assert all(entry["db_id"] != db_id for entry in databases)
+
+    allowed_get = await test_client.get(
+        f"/api/knowledge/databases/{created_db_id}", headers=standard_user["headers"]
+    )
+    assert allowed_get.status_code == 200, allowed_get.text
 
     forbidden_get = await test_client.get(f"/api/knowledge/databases/{db_id}", headers=standard_user["headers"])
     assert forbidden_get.status_code == 403

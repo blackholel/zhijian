@@ -25,7 +25,7 @@
         v-model:value="formState.description"
         placeholder="请输入评估基准描述（可选）"
         :rows="3"
-      </a-textarea>
+      />
     </a-form-item>
 
     <a-form-item label="生成参数" name="params" :extra="extraText">

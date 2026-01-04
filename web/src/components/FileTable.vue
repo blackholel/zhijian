@@ -101,7 +101,7 @@
       </template>
       <div class="rechunk-params">
         <ChunkParamsConfig
-          :temp-chunk-params="rechunkParams"
+          v-model:temp-chunk-params="rechunkParams"
           :show-qa-split="true"
         />
       </div>

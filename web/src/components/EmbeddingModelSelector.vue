@@ -14,7 +14,10 @@
     >
       <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
         <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-          {{ name }} ({{ configStore.config?.embed_model_names[name]?.dimension }})
+          {{ name }}
+          <template v-if="getModelDimension(name) != null">
+            ({{ getModelDimension(name) }})
+          </template>
         </span>
         <span
           :style="{
@@ -74,7 +77,9 @@ const state = reactive({
 })
 
 const embedModelChoices = computed(() => {
-  return Object.keys(configStore?.config?.embed_model_names || {}) || []
+  const configChoices = Object.keys(configStore?.config?.embed_model_names || {})
+  if (configChoices.length) return configChoices
+  return Object.keys(state.modelStatuses || {})
 })
 
 // 检查所有embedding模型状态
@@ -82,15 +87,17 @@ const checkAllModelStatus = async () => {
   try {
     state.checkingStatus = true
     const response = await embeddingApi.getAllModelsStatus()
-    if (response.status.models) {
-      state.modelStatuses = response.status.models
-    }
+    state.modelStatuses = response?.status?.models || response?.models || {}
   } catch (error) {
     console.error('检查所有模型状态失败:', error)
     message.error('获取模型状态失败')
   } finally {
     state.checkingStatus = false
   }
+}
+
+const getModelDimension = (modelId) => {
+  return configStore.config?.embed_model_names?.[modelId]?.dimension ?? null
 }
 
 // 获取模型状态图标

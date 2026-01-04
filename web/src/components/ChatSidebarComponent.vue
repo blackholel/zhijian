@@ -212,7 +212,6 @@ const toggleCollapse = () => {
   emit('toggle-sidebar');
 };
 
-
 </script>
 
 <style lang="less" scoped>
@@ -318,6 +317,11 @@ const toggleCollapse = () => {
       .loading-icon {
         animation: spin 1s linear infinite;
       }
+    }
+
+    .kb-btn {
+      margin-top: 8px;
+      color: var(--gray-800);
     }
   }
 

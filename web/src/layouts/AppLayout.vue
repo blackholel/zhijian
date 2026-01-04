@@ -9,6 +9,7 @@ import { useConfigStore } from '@/stores/config'
 import { useDatabaseStore } from '@/stores/database'
 import { useInfoStore } from '@/stores/info'
 import { useTaskerStore } from '@/stores/tasker'
+import { useUserStore } from '@/stores/user'
 import { storeToRefs } from 'pinia'
 import UserInfoComponent from '@/components/UserInfoComponent.vue'
 import DebugComponent from '@/components/DebugComponent.vue'
@@ -19,6 +20,7 @@ const configStore = useConfigStore()
 const databaseStore = useDatabaseStore()
 const infoStore = useInfoStore()
 const taskerStore = useTaskerStore()
+const userStore = useUserStore()
 const { activeCount: activeCountRef, isDrawerOpen } = storeToRefs(taskerStore)
 
 const layoutSettings = reactive({
@@ -103,28 +105,23 @@ console.log(route)
 const activeTaskCount = computed(() => activeCountRef.value || 0)
 
 // 下面是导航菜单部分，添加智能体项
-const mainList = [{
-    name: '智能体',
-    path: '/agent',
-    icon: Bot,
-    activeIcon: Bot,
-  }, {
-    name: '图谱',
-    path: '/graph',
-    icon: Waypoints,
-    activeIcon: Waypoints,
-  }, {
-    name: '知识库',
-    path: '/database',
-    icon: LibraryBig,
-    activeIcon: LibraryBig,
-  }, {
-    name: 'Dashboard',
-    path: '/dashboard',
-    icon: BarChart3,
-    activeIcon: BarChart3,
+const mainList = computed(() => {
+  if (!userStore.isAdmin) {
+    return [
+      { name: '对话', path: '/chat', icon: Bot, activeIcon: Bot },
+      { name: '知识库', path: '/database', icon: LibraryBig, activeIcon: LibraryBig },
+    ]
   }
-]
+
+  return [
+    { name: '智能体', path: '/agent', icon: Bot, activeIcon: Bot },
+    { name: '图谱', path: '/graph', icon: Waypoints, activeIcon: Waypoints },
+    { name: '知识库', path: '/database', icon: LibraryBig, activeIcon: LibraryBig },
+    { name: 'Dashboard', path: '/dashboard', icon: BarChart3, activeIcon: BarChart3 },
+  ]
+})
+
+const mobileChatPath = computed(() => (userStore.isAdmin ? '/agent' : '/chat'))
 
 // Provide settings modal methods to child components
 provide('settingsModal', {
@@ -205,9 +202,9 @@ provide('settingsModal', {
         <UserInfoComponent />
       </div>
 
-      </div>
+    </div>
     <div class="header-mobile">
-      <RouterLink to="/agent" class="nav-item" active-class="active">对话</RouterLink>
+      <RouterLink :to="mobileChatPath" class="nav-item" active-class="active">对话</RouterLink>
       <RouterLink to="/database" class="nav-item" active-class="active">知识</RouterLink>
     </div>
     <router-view v-slot="{ Component, route }" id="app-router-view">

@@ -10,19 +10,19 @@
       layout="vertical"
       >
         <a-form-item label="Chunk Size" name="chunk_size">
-          <a-input-number v-model:value="tempChunkParams.chunk_size" :min="100" :max="10000" style="width: 100%;" />
+          <a-input-number v-model:value="chunkSize" :min="100" :max="10000" style="width: 100%;" />
           <p class="param-description">每个文本片段的最大字符数</p>
         </a-form-item>
         <a-form-item label="Chunk Overlap" name="chunk_overlap">
-          <a-input-number v-model:value="tempChunkParams.chunk_overlap" :min="0" :max="1000" style="width: 100%;" />
+          <a-input-number v-model:value="chunkOverlap" :min="0" :max="1000" style="width: 100%;" />
           <p class="param-description">相邻文本片段间的重叠字符数</p>
         </a-form-item>
         <a-form-item v-if="showQaSplit" label="QA分割模式" name="use_qa_split">
-          <a-switch v-model:checked="tempChunkParams.use_qa_split" />
+          <a-switch v-model:checked="useQaSplit" />
           <p class="param-description">启用后将按QA对分割，忽略上述chunk大小设置</p>
         </a-form-item>
         <a-form-item v-if="tempChunkParams?.use_qa_split && showQaSplit" label="QA分隔符" name="qa_separator">
-          <a-input v-model:value="tempChunkParams.qa_separator" placeholder="输入QA分隔符" style="width: 100%;" />
+          <a-input v-model:value="qaSeparator" placeholder="输入QA分隔符" style="width: 100%;" />
           <p class="param-description">用于分割不同QA对的分隔符</p>
         </a-form-item>
       </a-form>
@@ -30,8 +30,9 @@
 </template>
 
 <script setup>
+import { computed } from 'vue';
 
-defineProps({
+const props = defineProps({
   tempChunkParams: {
     type: Object,
     required: true
@@ -40,6 +41,35 @@ defineProps({
     type: Boolean,
     default: true
   },
+});
+
+const emit = defineEmits(['update:tempChunkParams']);
+
+const updateParams = (patch) => {
+  emit('update:tempChunkParams', {
+    ...(props.tempChunkParams || {}),
+    ...patch,
+  });
+};
+
+const chunkSize = computed({
+  get: () => props.tempChunkParams?.chunk_size,
+  set: (value) => updateParams({ chunk_size: value }),
+});
+
+const chunkOverlap = computed({
+  get: () => props.tempChunkParams?.chunk_overlap,
+  set: (value) => updateParams({ chunk_overlap: value }),
+});
+
+const useQaSplit = computed({
+  get: () => Boolean(props.tempChunkParams?.use_qa_split),
+  set: (value) => updateParams({ use_qa_split: value }),
+});
+
+const qaSeparator = computed({
+  get: () => props.tempChunkParams?.qa_separator,
+  set: (value) => updateParams({ qa_separator: value }),
 });
 </script>
 

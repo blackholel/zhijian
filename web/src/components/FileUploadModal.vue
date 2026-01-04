@@ -158,7 +158,7 @@
     </template>
     <div class="chunk-config-content">
       <ChunkParamsConfig
-        :temp-chunk-params="tempChunkParams"
+        v-model:temp-chunk-params="tempChunkParams"
         :show-qa-split="isQaSplitSupported"
       />
     </div>

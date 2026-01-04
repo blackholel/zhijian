@@ -133,9 +133,9 @@ const goToChat = async () => {
     // 获取默认智能体
     const defaultAgent = agentStore.defaultAgent;
     if (defaultAgent?.id) {
-      router.push(`/agent/${defaultAgent.id}`);
+      router.push(`/chat/${defaultAgent.id}`);
     } else {
-      router.push('/agent');
+      router.push('/chat');
     }
   } catch (error) {
     console.error('跳转到智能体页面失败:', error);
