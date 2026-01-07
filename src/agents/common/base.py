@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 import tomllib as tomli
 from abc import abstractmethod
 from pathlib import Path
 
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver, aiosqlite
 from langgraph.graph.state import CompiledStateGraph
 
 from src import config as sys_config
@@ -28,6 +27,8 @@ class BaseAgent:
     def __init__(self, **kwargs):
         self.graph = None  # will be covered by get_graph
         self.checkpointer = None
+        self._checkpointer_cm = None
+        self._checkpointer_lock = asyncio.Lock()
         self.workdir = Path(sys_config.save_dir) / "agents" / self.module_name
         self.workdir.mkdir(parents=True, exist_ok=True)
         self._metadata_cache = None  # Cache for metadata to avoid repeated file reads
@@ -67,22 +68,42 @@ class BaseAgent:
             yield event["messages"]
 
     async def stream_messages(self, messages: list[str], input_context=None, **kwargs):
-        graph = await self.get_graph()
-        context = self.context_schema.from_file(module_name=self.module_name, input_context=input_context)
-        logger.debug(f"stream_messages: {context}")
-        # TODO Checkpointer 似乎还没有适配最新的 1.0 Context API
+        def is_connection_closed_error(exc: BaseException) -> bool:
+            if "the connection is closed" in str(exc):
+                return True
+            if hasattr(exc, "exceptions"):
+                for sub in getattr(exc, "exceptions", []) or []:
+                    if is_connection_closed_error(sub):
+                        return True
+            return False
 
-        # 从 input_context 中提取 attachments（如果有）
-        attachments = (input_context or {}).get("attachments", [])
-        input_config = {"configurable": input_context, "recursion_limit": 300}
+        attempt = 0
+        while attempt < 2:
+            attempt += 1
 
-        async for msg, metadata in graph.astream(
-            {"messages": messages, "attachments": attachments},
-            stream_mode="messages",
-            context=context,
-            config=input_config,
-        ):
-            yield msg, metadata
+            graph = await self.get_graph()
+            context = self.context_schema.from_file(module_name=self.module_name, input_context=input_context)
+            logger.debug(f"stream_messages: {context}")
+
+            attachments = (input_context or {}).get("attachments", [])
+            input_config = {"configurable": input_context, "recursion_limit": 300}
+
+            try:
+                async for msg, metadata in graph.astream(
+                    {"messages": messages, "attachments": attachments},
+                    stream_mode="messages",
+                    context=context,
+                    config=input_config,
+                ):
+                    yield msg, metadata
+                return
+            except Exception as e:
+                if attempt == 1 and is_connection_closed_error(e):
+                    logger.warning(f"Checkpointer connection closed, reinitializing and retrying once: {e}")
+                    await self.aclose()
+                    self.reload_graph()
+                    continue
+                raise
 
     async def invoke_messages(self, messages: list[str], input_context=None, **kwargs):
         graph = await self.get_graph()
@@ -99,11 +120,12 @@ class BaseAgent:
         return msg
 
     async def check_checkpointer(self):
-        app = await self.get_graph()
-        if not hasattr(app, "checkpointer") or app.checkpointer is None:
-            logger.warning(f"智能体 {self.name} 的 Graph 未配置 checkpointer，无法获取历史记录")
+        try:
+            await self._get_checkpointer()
+            return True
+        except Exception:
+            logger.warning(f"智能体 {self.name} 的 checkpointer 初始化失败，无法获取历史记录")
             return False
-        return True
 
     async def get_history(self, user_id, thread_id) -> list[dict]:
         """获取历史消息"""
@@ -137,6 +159,16 @@ class BaseAgent:
         self.graph = None
         logger.info(f"{self.name} graph 缓存已清空，将在下次调用时重新构建")
 
+    async def aclose(self):
+        if self._checkpointer_cm is None:
+            return
+        try:
+            await self._checkpointer_cm.__aexit__(None, None, None)
+        except Exception as e:
+            logger.warning(f"关闭 checkpointer 连接时发生异常: {e}")
+        self._checkpointer_cm = None
+        self.checkpointer = None
+
     @abstractmethod
     async def get_graph(self, **kwargs) -> CompiledStateGraph:
         """
@@ -147,42 +179,29 @@ class BaseAgent:
         pass
 
     async def _get_checkpointer(self):
-        # 创建数据库连接并确保设置 checkpointer
-        checkpointer = None
+        if self.checkpointer is not None:
+            conn = getattr(self.checkpointer, "conn", None)
+            if conn is not None and getattr(conn, "closed", False):
+                await self.aclose()
+            else:
+                return self.checkpointer
 
-        postgres_uri = os.getenv("POSTGRES_URI")
-        if postgres_uri:
-            try:
-                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        async with self._checkpointer_lock:
+            if self.checkpointer is not None:
+                return self.checkpointer
 
-                conn_string = postgres_uri.replace("postgresql+asyncpg://", "postgresql://")
-                checkpointer = AsyncPostgresSaver.from_conn_string(conn_string)
-                await checkpointer.setup()
-                logger.info(f"使用 PostgreSQL 检查点存储: {postgres_uri}")
-                return checkpointer
-            except Exception as e:
-                logger.warning(f"PostgreSQL checkpointer 不可用: {e}，将使用 SQLite checkpointer")
+            postgres_uri = os.getenv("POSTGRES_URI")
+            if not postgres_uri:
+                raise RuntimeError("POSTGRES_URI 未配置，无法初始化智能体 checkpointer")
 
-        try:
-            checkpointer = AsyncSqliteSaver(await self.get_async_conn())
-            logger.info(f"使用 SQLite 检查点存储: {os.path.join(self.workdir, 'aio_history.db')}")
-        except Exception as e:
-            logger.error(f"构建 Graph 设置 checkpointer 时出错: {e}, 尝试使用内存存储")
-            checkpointer = InMemorySaver()
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-        return checkpointer
-
-    async def get_async_conn(self) -> aiosqlite.Connection:
-        """获取异步数据库连接"""
-        conn = await aiosqlite.connect(os.path.join(self.workdir, "aio_history.db"))
-        # Patch: langgraph's AsyncSqliteSaver expects is_alive() method which aiosqlite may not have
-        if not hasattr(conn, "is_alive"):
-            conn.is_alive = lambda: True
-        return conn
-
-    async def get_aio_memory(self) -> AsyncSqliteSaver:
-        """获取异步存储实例"""
-        return AsyncSqliteSaver(await self.get_async_conn())
+            conn_string = postgres_uri.replace("postgresql+asyncpg://", "postgresql://")
+            self._checkpointer_cm = AsyncPostgresSaver.from_conn_string(conn_string)
+            self.checkpointer = await self._checkpointer_cm.__aenter__()
+            await self.checkpointer.setup()
+            logger.info(f"使用 PostgreSQL 检查点存储: {postgres_uri}")
+            return self.checkpointer
 
     def load_metadata(self) -> dict:
         """Load metadata from metadata.toml file in the agent's source directory."""

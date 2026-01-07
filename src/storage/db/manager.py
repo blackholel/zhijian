@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import pathlib
 from contextlib import asynccontextmanager, contextmanager
 
 from sqlalchemy import create_engine, func, select
@@ -9,107 +8,44 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import sessionmaker
 
 from server.utils.singleton import SingletonMeta
-from src import config
 from src.storage.db.models import Base, User
 from src.utils import logger
-
-try:
-    from server.utils.migrate import DatabaseMigrator, validate_database_schema
-except ImportError:
-    DatabaseMigrator = None
-
-    # 如果迁移工具不存在，使用简单的占位函数
-    def validate_database_schema(db_path):
-        return True, []
 
 
 class DBManager(metaclass=SingletonMeta):
     """数据库管理器 - 提供异步数据库连接和会话管理"""
 
     def __init__(self):
-        self.db_path = os.path.join(config.save_dir, "database", "server.db")
-        self.ensure_db_dir()
+        raw_url = os.getenv("POSTGRES_URI")
+        if not raw_url or not raw_url.startswith("postgresql"):
+            raise ValueError("POSTGRES_URI 未配置或不是 postgresql 连接串，无法初始化数据库")
 
-        # 使用环境变量判断是否使用 PostgreSQL
-        self.db_url = os.getenv("POSTGRES_URI")
+        self.db_url = raw_url
 
-        if self.db_url and self.db_url.startswith("postgresql"):
-            # 创建异步引擎
-            self.async_engine = create_async_engine(
-                self.db_url,
-                json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
-                json_deserializer=json.loads,
-                pool_pre_ping=True,  # 连接健康检查
-                pool_size=10,
-                max_overflow=20,
-            )
-            self.engine = create_engine(
-                self.db_url.replace("+asyncpg", ""),  # 移除 asyncpg 前缀用于同步引擎
-                json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
-                json_deserializer=json.loads,
-            )
-        else:
-            # 创建异步SQLAlchemy引擎，配置JSON序列化器以支持中文
-            # 使用 ensure_ascii=False 确保中文字符不被转义为 Unicode 序列
-            self.async_engine = create_async_engine(
-                f"sqlite+aiosqlite:///{self.db_path}",
-                json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
-                json_deserializer=json.loads,
-            )
-            # 保留同步引擎用于迁移等特殊操作
-            self.engine = create_engine(
-                f"sqlite:///{self.db_path}",
-                json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
-                json_deserializer=json.loads,
-            )
+        self.async_engine = create_async_engine(
+            self.db_url,
+            json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
+            json_deserializer=json.loads,
+            pool_pre_ping=True,
+            pool_size=10,
+            max_overflow=20,
+        )
+        self.engine = create_engine(
+            self.db_url.replace("+asyncpg", ""),
+            json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
+            json_deserializer=json.loads,
+        )
 
         # 创建异步会话工厂
         self.AsyncSession = async_sessionmaker(bind=self.async_engine, class_=AsyncSession, expire_on_commit=False)
 
         self.Session = sessionmaker(bind=self.engine)
 
-        # 首先创建基本表结构
-        self.create_tables()
-
-        # 然后检查并执行数据库迁移
-        self.run_migrations()
-
-    def ensure_db_dir(self):
-        """确保数据库目录存在"""
-        db_dir = os.path.dirname(self.db_path)
-        pathlib.Path(db_dir).mkdir(parents=True, exist_ok=True)
-
     def create_tables(self):
         """创建数据库表"""
         # 确保所有表都会被创建
         Base.metadata.create_all(self.engine)
         logger.info("Database tables created/checked")
-
-    def run_migrations(self):
-        """运行数据库迁移"""
-        if not os.path.exists(self.db_path):
-            return
-
-        if DatabaseMigrator is not None:
-            migrator = DatabaseMigrator(self.db_path)
-            try:
-                migrator.run_migrations()
-            except Exception as exc:
-                logger.error(f"数据库迁移执行失败: {exc}")
-        else:
-            logger.warning("数据库迁移工具缺失，无法自动执行迁移")
-
-        is_valid, issues = validate_database_schema(self.db_path)
-
-        if not is_valid:
-            logger.warning("=" * 60)
-            logger.warning("检测到数据库结构与当前模型不一致！")
-            logger.warning("=" * 60)
-            for issue in issues:
-                logger.warning(f"  ⚠️  {issue}")
-            logger.warning("")
-            logger.warning("请运行 scripts/migrate_user_soft_delete.py 手动修复数据库结构")
-            logger.warning("=" * 60)
 
     def get_session(self):
         """获取同步数据库会话"""
@@ -148,6 +84,9 @@ class DBManager(metaclass=SingletonMeta):
             # Shield close operation to ensure connection is properly closed even if task is cancelled
             # This prevents aiosqlite from raising errors during cancellation
             await asyncio.shield(session.close())
+
+    def get_async_session_factory(self) -> async_sessionmaker[AsyncSession]:
+        return self.AsyncSession
 
     def check_first_run(self):
         """检查是否首次运行（同步版本）"""

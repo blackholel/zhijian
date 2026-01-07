@@ -36,6 +36,10 @@ services:
       - MINERU_OCR_URI=${MINERU_OCR_URI:-http://mineru:30000}
       - PADDLEX_URI=${PADDLEX_URI:-http://paddlex:8080}
       - MINIO_URI=${MINIO_URI:-http://milvus-minio:9000}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-yuxi_know}
+      - POSTGRES_URI=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-yuxi_know}
       - MODEL_DIR_IN_DOCKER=/models
       - RUNNING_IN_DOCKER=true
       - NO_PROXY=localhost,127.0.0.1,milvus,graph,milvus-minio,milvus-etcd-dev,etcd,minio,mineru,paddlex,api.siliconflow.cn
@@ -50,12 +54,32 @@ services:
       retries: 8
       start_period: 180s
     depends_on:
-      # postgres:
-      #   condition: service_healthy
+      postgres:
+        condition: service_healthy
       milvus:
         condition: service_healthy
       minio:
         condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-yuxi_know}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/volumes/postgres/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-yuxi_know}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+    restart: unless-stopped
 
   web:
     build:

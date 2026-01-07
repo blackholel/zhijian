@@ -1,3 +1,5 @@
+import os
+
 from langchain.agents import create_agent
 
 from src import config
@@ -5,7 +7,16 @@ from src.agents.common import BaseAgent, get_mcp_tools, load_chat_model
 from src.agents.common.toolkits.mysql import get_mysql_tools
 from src.utils import logger
 
-_mcp_servers = {"mcp-server-chart": {"command": "npx", "args": ["-y", "@antv/mcp-server-chart"], "transport": "stdio"}}
+_mcp_servers = {
+    "mcp-server-chart": {
+        "command": "npx",
+        "args": ["-y", "@antv/mcp-server-chart"],
+        "transport": "stdio",
+        "env": {
+            "NPM_CONFIG_CACHE": os.getenv("NPM_CONFIG_CACHE", "/tmp/yuxi-npm-cache"),
+        },
+    }
+}
 
 
 class SqlReporterAgent(BaseAgent):

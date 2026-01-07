@@ -8,10 +8,11 @@ All database operations are now asynchronous for improved performance.
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.storage.db.models import Conversation, ConversationStats, Message, ToolCall
+from src.storage.db.models import Conversation, ConversationStats, Message, MessageFeedback, ToolCall
 from src.utils import logger
 from src.utils.datetime_utils import utc_now
 
@@ -70,6 +71,33 @@ class ConversationManager:
 
         logger.info(f"Created conversation: {conversation.thread_id} for user {user_id}")
         return conversation
+
+    async def get_or_create_conversation(
+        self,
+        user_id: str,
+        agent_id: str,
+        thread_id: str,
+        title: str | None = None,
+        metadata: dict | None = None,
+    ) -> Conversation:
+        conversation = await self.get_conversation_by_thread_id(thread_id)
+        if conversation:
+            return conversation
+
+        try:
+            return await self.create_conversation(
+                user_id=user_id,
+                agent_id=agent_id,
+                title=title,
+                thread_id=thread_id,
+                metadata=metadata,
+            )
+        except IntegrityError:
+            await self.db.rollback()
+            conversation = await self.get_conversation_by_thread_id(thread_id)
+            if conversation:
+                return conversation
+            raise
 
     async def get_conversation_by_thread_id(self, thread_id: str) -> Conversation | None:
         """
@@ -279,6 +307,44 @@ class ConversationManager:
             return []
 
         return await self.get_messages(conversation.id, limit, offset)
+
+    async def get_message_by_id(self, message_id: int) -> Message | None:
+        result = await self.db.execute(
+            select(Message)
+            .options(
+                selectinload(Message.tool_calls),
+                selectinload(Message.feedbacks),
+            )
+            .filter(Message.id == message_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_feedback(self, message_id: int, user_id: str) -> MessageFeedback | None:
+        result = await self.db.execute(
+            select(MessageFeedback).filter(
+                MessageFeedback.message_id == message_id,
+                MessageFeedback.user_id == str(user_id),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def add_feedback(
+        self,
+        message_id: int,
+        user_id: str,
+        rating: str,
+        reason: str | None = None,
+    ) -> MessageFeedback:
+        feedback = MessageFeedback(
+            message_id=message_id,
+            user_id=str(user_id),
+            rating=rating,
+            reason=reason,
+        )
+        self.db.add(feedback)
+        await self.db.commit()
+        await self.db.refresh(feedback)
+        return feedback
 
     async def list_conversations(
         self, user_id: str | None = None, agent_id: str | None = None, status: str = "active"

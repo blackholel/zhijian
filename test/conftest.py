@@ -21,9 +21,6 @@ API_BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:5050").rstrip("/")
 ADMIN_LOGIN = os.getenv("TEST_USERNAME")
 ADMIN_PASSWORD = os.getenv("TEST_PASSWORD")
 
-assert ADMIN_LOGIN, "TEST_USERNAME is not set"
-assert ADMIN_PASSWORD, "TEST_PASSWORD is not set"
-
 _ADMIN_TOKEN_CACHE: str | None = None
 HTTP_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 

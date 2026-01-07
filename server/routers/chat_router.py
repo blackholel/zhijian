@@ -9,9 +9,8 @@ from langchain.messages import AIMessageChunk, HumanMessage, AIMessage
 from langgraph.types import Command
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from src.storage.db.models import User, MessageFeedback, Message, Conversation
+from src.storage.db.models import User, Conversation
 from src.storage.conversation import ConversationManager
 from src.storage.db.manager import db_manager
 from server.routers.auth_router import get_admin_user
@@ -543,112 +542,116 @@ async def chat_agent(
         # 构造运行时配置，如果没有thread_id则生成一个
         user_id = str(current_user.id)
         thread_id = config.get("thread_id")
-        input_context = {"user_id": user_id, "thread_id": thread_id}
 
         if not thread_id:
             thread_id = str(uuid.uuid4())
             logger.warning(f"No thread_id provided, generated new thread_id: {thread_id}")
 
+        input_context = {"user_id": user_id, "thread_id": thread_id}
+        meta["thread_id"] = thread_id
+
         try:
-            async with db_manager.get_async_session_context() as db:
-                # Initialize conversation manager
-                conv_manager = ConversationManager(db)
+            conv_manager = ConversationManager(db)
 
-                # Save user message
-                try:
-                    await conv_manager.add_message_by_thread_id(
-                        thread_id=thread_id,
-                        role="user",
-                        content=query,
-                        message_type=message_type,
-                        image_content=image_content,
-                        extra_metadata={"raw_message": human_message.model_dump()},
-                    )
-                except Exception as e:
-                    logger.error(f"Error saving user message: {e}")
-
-                try:
-                    assert thread_id, "thread_id is required"
-                    attachments = await conv_manager.get_attachments_by_thread_id(thread_id)
-                    input_context["attachments"] = attachments
-                    logger.debug(f"Loaded {len(attachments)} attachments for thread_id={thread_id}")
-                except Exception as e:
-                    logger.error(f"Error loading attachments for thread_id={thread_id}: {e}")
-                    input_context["attachments"] = []
-
-                full_msg = None
-                accumulated_content = []
-                langgraph_config = {"configurable": input_context}
-                async for msg, metadata in agent.stream_messages(messages, input_context=input_context):
-                    if isinstance(msg, AIMessageChunk):
-                        accumulated_content.append(msg.content)
-
-                        content_for_check = "".join(accumulated_content[-10:])
-                        if conf.enable_content_guard and await content_guard.check_with_keywords(content_for_check):
-                            logger.warning("Sensitive content detected in stream")
-                            full_msg = AIMessage(content="".join(accumulated_content))
-                            await save_partial_message(conv_manager, thread_id, full_msg, "content_guard_blocked")
-                            meta["time_cost"] = asyncio.get_event_loop().time() - start_time
-                            yield make_chunk(status="interrupted", message="检测到敏感内容，已中断输出", meta=meta)
-                            return
-
-                        yield make_chunk(content=msg.content, msg=msg.model_dump(), metadata=metadata, status="loading")
-
-                    else:
-                        msg_dict = msg.model_dump()
-                        yield make_chunk(msg=msg_dict, metadata=metadata, status="loading")
-
-                        try:
-                            if msg_dict.get("type") == "tool":
-                                graph = await agent.get_graph()
-                                state = await graph.aget_state(langgraph_config)
-                                agent_state = _extract_agent_state(getattr(state, "values", {})) if state else {}
-                                if agent_state:
-                                    yield make_chunk(status="agent_state", agent_state=agent_state, meta=meta)
-                        except Exception as e:
-                            logger.error(f"Error processing tool message: {e}")
-                            pass
-
-                if not full_msg and accumulated_content:
-                    full_msg = AIMessage(content="".join(accumulated_content))
-
-                if (
-                    conf.enable_content_guard
-                    and hasattr(full_msg, "content")
-                    and await content_guard.check(full_msg.content)
-                ):
-                    logger.warning("Sensitive content detected in final message")
-                    await save_partial_message(conv_manager, thread_id, full_msg, "content_guard_blocked")
-                    meta["time_cost"] = asyncio.get_event_loop().time() - start_time
-                    yield make_chunk(status="interrupted", message="检测到敏感内容，已中断输出", meta=meta)
-                    return
-
-                # After streaming finished, check for interrupts and save messages
-
-                # Check for human approval interrupts
-                async for chunk in check_and_handle_interrupts(agent, langgraph_config, make_chunk, meta, thread_id):
-                    yield chunk
-
-                meta["time_cost"] = asyncio.get_event_loop().time() - start_time
-                try:
-                    graph = await agent.get_graph()
-                    state = await graph.aget_state(langgraph_config)
-                    agent_state = _extract_agent_state(getattr(state, "values", {})) if state else {}
-                except Exception:
-                    agent_state = {}
-
-                if agent_state:
-                    yield make_chunk(status="agent_state", agent_state=agent_state, meta=meta)
-
-                yield make_chunk(status="finished", meta=meta)
-
-                # Save all messages from LangGraph state
-                await save_messages_from_langgraph_state(
-                    agent_instance=agent,
+            try:
+                title = query.strip()[:50] if isinstance(query, str) else None
+                await conv_manager.get_or_create_conversation(
+                    user_id=user_id,
+                    agent_id=agent_id,
                     thread_id=thread_id,
-                    conv_mgr=conv_manager,
-                    config_dict=langgraph_config,
+                    title=title or None,
                 )
+            except Exception as e:
+                logger.error(f"Error ensuring conversation exists: {e}")
+
+            try:
+                await conv_manager.add_message_by_thread_id(
+                    thread_id=thread_id,
+                    role="user",
+                    content=query,
+                    message_type=message_type,
+                    image_content=image_content,
+                    extra_metadata={"raw_message": human_message.model_dump()},
+                )
+            except Exception as e:
+                logger.error(f"Error saving user message: {e}")
+
+            try:
+                attachments = await conv_manager.get_attachments_by_thread_id(thread_id)
+                input_context["attachments"] = attachments
+                logger.debug(f"Loaded {len(attachments)} attachments for thread_id={thread_id}")
+            except Exception as e:
+                logger.error(f"Error loading attachments for thread_id={thread_id}: {e}")
+                input_context["attachments"] = []
+
+            full_msg = None
+            accumulated_content = []
+            langgraph_config = {"configurable": input_context}
+            async for msg, metadata in agent.stream_messages(messages, input_context=input_context):
+                if isinstance(msg, AIMessageChunk):
+                    accumulated_content.append(msg.content)
+
+                    content_for_check = "".join(accumulated_content[-10:])
+                    if conf.enable_content_guard and await content_guard.check_with_keywords(content_for_check):
+                        logger.warning("Sensitive content detected in stream")
+                        full_msg = AIMessage(content="".join(accumulated_content))
+                        await save_partial_message(conv_manager, thread_id, full_msg, "content_guard_blocked")
+                        meta["time_cost"] = asyncio.get_event_loop().time() - start_time
+                        yield make_chunk(status="interrupted", message="检测到敏感内容，已中断输出", meta=meta)
+                        return
+
+                    yield make_chunk(content=msg.content, msg=msg.model_dump(), metadata=metadata, status="loading")
+
+                else:
+                    msg_dict = msg.model_dump()
+                    yield make_chunk(msg=msg_dict, metadata=metadata, status="loading")
+
+                    try:
+                        if msg_dict.get("type") == "tool":
+                            graph = await agent.get_graph()
+                            state = await graph.aget_state(langgraph_config)
+                            agent_state = _extract_agent_state(getattr(state, "values", {})) if state else {}
+                            if agent_state:
+                                yield make_chunk(status="agent_state", agent_state=agent_state, meta=meta)
+                    except Exception as e:
+                        logger.error(f"Error processing tool message: {e}")
+
+            if not full_msg and accumulated_content:
+                full_msg = AIMessage(content="".join(accumulated_content))
+
+            if (
+                conf.enable_content_guard
+                and hasattr(full_msg, "content")
+                and await content_guard.check(full_msg.content)
+            ):
+                logger.warning("Sensitive content detected in final message")
+                await save_partial_message(conv_manager, thread_id, full_msg, "content_guard_blocked")
+                meta["time_cost"] = asyncio.get_event_loop().time() - start_time
+                yield make_chunk(status="interrupted", message="检测到敏感内容，已中断输出", meta=meta)
+                return
+
+            async for chunk in check_and_handle_interrupts(agent, langgraph_config, make_chunk, meta, thread_id):
+                yield chunk
+
+            meta["time_cost"] = asyncio.get_event_loop().time() - start_time
+            try:
+                graph = await agent.get_graph()
+                state = await graph.aget_state(langgraph_config)
+                agent_state = _extract_agent_state(getattr(state, "values", {})) if state else {}
+            except Exception:
+                agent_state = {}
+
+            if agent_state:
+                yield make_chunk(status="agent_state", agent_state=agent_state, meta=meta)
+
+            yield make_chunk(status="finished", meta=meta)
+
+            await save_messages_from_langgraph_state(
+                agent_instance=agent,
+                thread_id=thread_id,
+                conv_mgr=conv_manager,
+                config_dict=langgraph_config,
+            )
 
         except (asyncio.CancelledError, ConnectionError) as e:
             # 客户端主动中断连接，检查中断并保存已生成的部分内容
@@ -660,8 +663,9 @@ async def chat_agent(
                 if not full_msg and accumulated_content:
                     full_msg = AIMessage(content="".join(accumulated_content))
 
-                async with db_manager.get_async_session_context() as new_db:
-                    new_conv_manager = ConversationManager(new_db)
+                cleanup_db = await db_manager.get_async_session()
+                try:
+                    new_conv_manager = ConversationManager(cleanup_db)
                     await save_partial_message(
                         new_conv_manager,
                         thread_id,
@@ -669,6 +673,8 @@ async def chat_agent(
                         error_message="对话已中断" if not full_msg else None,
                         error_type="interrupted",
                     )
+                finally:
+                    await cleanup_db.close()
 
             # Create a task and await it, shielding it from cancellation
             # ensuring the DB operation completes even if the stream is cancelled
@@ -692,9 +698,9 @@ async def chat_agent(
             if not full_msg and accumulated_content:
                 full_msg = AIMessage(content="".join(accumulated_content))
 
-            # 保存错误消息到数据库
-            async with db_manager.get_async_session_context() as new_db:
-                new_conv_manager = ConversationManager(new_db)
+            error_db = await db_manager.get_async_session()
+            try:
+                new_conv_manager = ConversationManager(error_db)
                 await save_partial_message(
                     new_conv_manager,
                     thread_id,
@@ -702,6 +708,8 @@ async def chat_agent(
                     error_message=error_msg,
                     error_type=error_type,
                 )
+            finally:
+                await error_db.close()
 
             yield make_chunk(status="error", error_type=error_type, error_message=error_msg, meta=meta)
 
@@ -808,40 +816,40 @@ async def resume_agent_chat(
         )
 
         try:
-            async with db_manager.get_async_session_context() as db:
-                async for msg, metadata in stream_source:
-                    # 确保msg有正确的ID结构
-                    msg_dict = msg.model_dump()
-                    if "id" not in msg_dict:
-                        msg_dict["id"] = str(uuid.uuid4())
+            conv_manager = ConversationManager(db)
+            async for msg, metadata in stream_source:
+                msg_dict = msg.model_dump()
+                if "id" not in msg_dict:
+                    msg_dict["id"] = str(uuid.uuid4())
 
-                    yield make_resume_chunk(
-                        content=getattr(msg, "content", ""), msg=msg_dict, metadata=metadata, status="loading"
-                    )
-
-                meta["time_cost"] = asyncio.get_event_loop().time() - start_time
-                yield make_resume_chunk(status="finished", meta=meta)
-
-                # 保存消息到数据库
-                langgraph_config = {"configurable": input_context}
-                conv_manager = ConversationManager(db)
-                await save_messages_from_langgraph_state(
-                    agent_instance=agent,
-                    thread_id=thread_id,
-                    conv_mgr=conv_manager,
-                    config_dict=langgraph_config,
+                yield make_resume_chunk(
+                    content=getattr(msg, "content", ""), msg=msg_dict, metadata=metadata, status="loading"
                 )
+
+            meta["time_cost"] = asyncio.get_event_loop().time() - start_time
+            yield make_resume_chunk(status="finished", meta=meta)
+
+            langgraph_config = {"configurable": input_context}
+            await save_messages_from_langgraph_state(
+                agent_instance=agent,
+                thread_id=thread_id,
+                conv_mgr=conv_manager,
+                config_dict=langgraph_config,
+            )
 
         except (asyncio.CancelledError, ConnectionError) as e:
             # 客户端主动中断连接
             logger.warning(f"Client disconnected during resume: {e}")
 
-            # 保存中断消息到数据库
-            async with db_manager.get_async_session_context() as new_db:
-                new_conv_manager = ConversationManager(new_db)
+            # Save interrupted message
+            pool = await db_manager.get_async_session()
+            try:
+                new_conv_manager = ConversationManager(pool)
                 await save_partial_message(
                     new_conv_manager, thread_id, error_message="对话恢复已中断", error_type="resume_interrupted"
                 )
+            finally:
+                await pool.close()
 
             yield make_resume_chunk(status="interrupted", message="对话恢复已中断", meta=meta)
 
@@ -849,12 +857,15 @@ async def resume_agent_chat(
             # 处理其他异常
             logger.error(f"Error during resume: {e}, {traceback.format_exc()}")
 
-            # 保存错误消息到数据库
-            async with db_manager.get_async_session_context() as new_db:
-                new_conv_manager = ConversationManager(new_db)
+            # Save error message
+            pool = await db_manager.get_async_session()
+            try:
+                new_conv_manager = ConversationManager(pool)
                 await save_partial_message(
                     new_conv_manager, thread_id, error_message=f"Error during resume: {e}", error_type="resume_error"
                 )
+            finally:
+                await pool.close()
 
             yield make_resume_chunk(message=f"Error during resume: {e}", status="error")
 
@@ -891,15 +902,15 @@ async def save_agent_config(
 
 @chat.get("/agent/{agent_id}/history")
 async def get_agent_history(
-    agent_id: str, thread_id: str, current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db)
+    agent_id: str,
+    thread_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """获取智能体历史消息（需要登录）- 包含用户反馈状态"""
     try:
-        # 获取Agent实例验证
         if not agent_manager.get_agent(agent_id):
             raise HTTPException(status_code=404, detail=f"智能体 {agent_id} 不存在")
 
-        # Use new storage system ONLY
         conv_manager = ConversationManager(db)
         await _require_user_conversation(conv_manager, thread_id, str(current_user.id))
         messages = await conv_manager.get_messages_by_thread_id(thread_id)
@@ -1054,13 +1065,14 @@ class AttachmentListResponse(BaseModel):
 
 @chat.post("/thread", response_model=ThreadResponse)
 async def create_thread(
-    thread: ThreadCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_required_user)
+    thread: ThreadCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """创建新对话线程 (使用新存储系统)"""
     thread_id = str(uuid.uuid4())
     logger.debug(f"thread.agent_id: {thread.agent_id}")
 
-    # Create conversation using new storage system
     conv_manager = ConversationManager(db)
     conversation = await conv_manager.create_conversation(
         user_id=str(current_user.id),
@@ -1091,7 +1103,6 @@ async def list_threads(
 
     logger.debug(f"agent_id: {agent_id}")
 
-    # Use new storage system
     conv_manager = ConversationManager(db)
     conversations = await conv_manager.list_conversations(
         user_id=str(current_user.id),
@@ -1117,14 +1128,12 @@ async def delete_thread(
     thread_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_required_user)
 ):
     """删除对话线程 (使用新存储系统)"""
-    # Use new storage system
     conv_manager = ConversationManager(db)
     conversation = await conv_manager.get_conversation_by_thread_id(thread_id)
 
     if not conversation or conversation.user_id != str(current_user.id):
         raise HTTPException(status_code=404, detail="对话线程不存在")
 
-    # Soft delete
     success = await conv_manager.delete_conversation(thread_id, soft_delete=True)
 
     if not success:
@@ -1145,14 +1154,12 @@ async def update_thread(
     current_user: User = Depends(get_required_user),
 ):
     """更新对话线程信息 (使用新存储系统)"""
-    # Use new storage system
     conv_manager = ConversationManager(db)
     conversation = await conv_manager.get_conversation_by_thread_id(thread_id)
 
     if not conversation or conversation.user_id != str(current_user.id) or conversation.status == "deleted":
         raise HTTPException(status_code=404, detail="对话线程不存在")
 
-    # Update conversation
     updated_conv = await conv_manager.update_conversation(
         thread_id=thread_id,
         title=thread_update.title,
@@ -1175,8 +1182,8 @@ async def update_thread(
 async def upload_thread_attachment(
     thread_id: str,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """上传并解析附件为 Markdown，附加到指定对话线程。"""
     conv_manager = ConversationManager(db)
@@ -1201,15 +1208,14 @@ async def upload_thread_attachment(
         "truncated": conversion.truncated,
     }
     await conv_manager.add_attachment(conversation.id, attachment_record)
-
     return _serialize_attachment(attachment_record)
 
 
 @chat.get("/thread/{thread_id}/attachments", response_model=AttachmentListResponse)
 async def list_thread_attachments(
     thread_id: str,
-    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """列出当前对话线程的所有附件元信息。"""
     conv_manager = ConversationManager(db)
@@ -1228,8 +1234,8 @@ async def list_thread_attachments(
 async def delete_thread_attachment(
     thread_id: str,
     file_id: str,
-    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """移除指定附件。"""
     conv_manager = ConversationManager(db)
@@ -1271,39 +1277,26 @@ async def submit_message_feedback(
         if feedback_data.rating not in ["like", "dislike"]:
             raise HTTPException(status_code=422, detail="Rating must be 'like' or 'dislike'")
 
-        # Verify message exists and get conversation to check permissions
-        message_result = await db.execute(select(Message).filter_by(id=message_id))
-        message = message_result.scalar_one_or_none()
+        conv_manager = ConversationManager(db)
 
+        message = await conv_manager.get_message_by_id(message_id)
         if not message:
             raise HTTPException(status_code=404, detail="Message not found")
 
-        # Verify user has access to this message (through conversation)
-        conversation_result = await db.execute(select(Conversation).filter_by(id=message.conversation_id))
-        conversation = conversation_result.scalar_one_or_none()
+        conversation = await conv_manager._get_conversation_by_id(message.conversation_id)
         if not conversation or conversation.user_id != str(current_user.id):
             raise HTTPException(status_code=403, detail="Access denied")
 
-        # Check if feedback already exists (user can only submit once)
-        existing_feedback_result = await db.execute(
-            select(MessageFeedback).filter_by(message_id=message_id, user_id=str(current_user.id))
-        )
-        existing_feedback = existing_feedback_result.scalar_one_or_none()
-
+        existing_feedback = await conv_manager.get_feedback(message_id, str(current_user.id))
         if existing_feedback:
             raise HTTPException(status_code=409, detail="Feedback already submitted for this message")
 
-        # Create new feedback
-        new_feedback = MessageFeedback(
+        new_feedback = await conv_manager.add_feedback(
             message_id=message_id,
             user_id=str(current_user.id),
             rating=feedback_data.rating,
             reason=feedback_data.reason,
         )
-
-        db.add(new_feedback)
-        await db.commit()
-        await db.refresh(new_feedback)
 
         logger.info(f"User {current_user.id} submitted {feedback_data.rating} feedback for message {message_id}")
 
@@ -1319,7 +1312,6 @@ async def submit_message_feedback(
         raise
     except Exception as e:
         logger.error(f"Error submitting message feedback: {e}, {traceback.format_exc()}")
-        await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to submit feedback: {str(e)}")
 
 
@@ -1331,11 +1323,8 @@ async def get_message_feedback(
 ):
     """Get feedback status for a specific message (for current user)"""
     try:
-        # Get user's feedback for this message
-        feedback_result = await db.execute(
-            select(MessageFeedback).filter_by(message_id=message_id, user_id=str(current_user.id))
-        )
-        feedback = feedback_result.scalar_one_or_none()
+        conv_manager = ConversationManager(db)
+        feedback = await conv_manager.get_feedback(message_id, str(current_user.id))
 
         if not feedback:
             return {"has_feedback": False, "feedback": None}

@@ -39,10 +39,18 @@ class UploadGraphService:
         """获取数据库驱动"""
         return self.connection.driver
 
+    @driver.setter
+    def driver(self, driver):
+        self.connection.driver = driver
+
     @property
     def status(self):
         """获取连接状态"""
         return self.connection.status
+
+    @status.setter
+    def status(self, status):
+        self.connection.status = status
 
     def start(self):
         """启动连接"""
