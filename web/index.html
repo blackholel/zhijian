@@ -5,6 +5,11 @@
     <link rel="icon" href="/favicon.svg">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>语析 - Knowledge Management</title>
+    <script>
+      if (location.hostname === 'localhost' && location.port === '5173') {
+        location.replace(location.href.replace('://localhost:', '://127.0.0.1:'))
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

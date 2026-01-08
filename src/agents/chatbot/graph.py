@@ -2,10 +2,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRetryMiddleware
 
 from src.agents.common import BaseAgent, load_chat_model
-from src.agents.common.mcp import get_mcp_tools
-from src.agents.common.middlewares import (
-    inject_attachment_context,
-)
+from src.agents.common.middlewares import UserMCPToolsMiddleware, inject_attachment_context
 from src.agents.common.tools import get_kb_based_tools
 
 from .context import Context
@@ -40,12 +37,6 @@ class ChatbotAgent(BaseAgent):
             kb_tools = get_kb_based_tools(db_names=knowledges)
             selected_tools.extend(kb_tools)
 
-        # 3. MCP 工具
-        if mcps:
-            for server_name in mcps:
-                mcp_tools = await get_mcp_tools(server_name)
-                selected_tools.extend(mcp_tools)
-
         return selected_tools
 
     async def get_graph(self, **kwargs):
@@ -62,6 +53,7 @@ class ChatbotAgent(BaseAgent):
             tools=await self.get_tools(context.tools, context.mcps, context.knowledges),
             system_prompt=context.system_prompt,
             middleware=[
+                UserMCPToolsMiddleware(),  # 运行时 MCP 工具注入（含用户工具）
                 inject_attachment_context,  # 附件上下文注入
                 ModelRetryMiddleware(),  # 模型重试中间件
             ],

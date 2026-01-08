@@ -16,7 +16,36 @@ import { message } from 'ant-design-vue'
  */
 export async function apiRequest(url, options = {}, requiresAuth = true, responseType = 'json') {
   try {
+    const isDev = !!import.meta?.env?.DEV
     const isFormData = options?.body instanceof FormData
+    const params = options?.params
+
+    // Serialize query params for GET-like requests (and others if needed)
+    if (params && typeof params === 'object') {
+      const normalizedUrl = (() => {
+        try {
+          return new URL(url, window.location.origin)
+        } catch {
+          return null
+        }
+      })()
+
+      if (normalizedUrl) {
+        Object.entries(params).forEach(([key, value]) => {
+          if (value === undefined || value === null || value === '') return
+          if (Array.isArray(value)) {
+            value.forEach((item) => {
+              if (item === undefined || item === null || item === '') return
+              normalizedUrl.searchParams.append(key, String(item))
+            })
+          } else {
+            normalizedUrl.searchParams.set(key, String(value))
+          }
+        })
+        url = normalizedUrl.toString()
+      }
+    }
+
     // 默认请求配置
     const requestOptions = {
       ...options,
@@ -25,6 +54,8 @@ export async function apiRequest(url, options = {}, requiresAuth = true, respons
         ...options.headers,
       },
     }
+    // params is not a valid fetch option
+    delete requestOptions.params
 
     // 如果需要认证，添加认证头
     if (requiresAuth) {
@@ -59,13 +90,18 @@ export async function apiRequest(url, options = {}, requiresAuth = true, respons
 
         // 如果是422错误，打印更详细的信息
         if (response.status === 422) {
-          console.error('422验证错误详情:', {
-            url,
-            requestMethod: requestOptions.method,
-            requestHeaders: requestOptions.headers,
-            requestBody: requestOptions.body,
-            responseData: errorData
-          });
+          const safeHeaders = { ...(requestOptions.headers || {}) }
+          if (safeHeaders.Authorization) safeHeaders.Authorization = 'Bearer ***'
+          if (safeHeaders.authorization) safeHeaders.authorization = 'Bearer ***'
+          if (isDev) {
+            console.error('422验证错误详情:', {
+              url,
+              requestMethod: requestOptions.method,
+              requestHeaders: safeHeaders,
+              requestBody: requestOptions.body,
+              responseData: errorData
+            });
+          }
         }
       } catch (e) {
         // 如果无法解析JSON，使用默认错误信息
@@ -223,6 +259,28 @@ export function apiSuperAdminPut(url, data = {}, options = {}, responseType = 'j
  */
 export function apiDelete(url, options = {}, requiresAuth = true, responseType = 'json') {
   return apiRequest(url, { method: 'DELETE', ...options }, requiresAuth, responseType)
+}
+
+/**
+ * 发送PATCH请求
+ * @param {string} url - API端点
+ * @param {Object} data - 请求体数据
+ * @param {Object} options - 其他请求选项
+ * @param {boolean} requiresAuth - 是否需要认证
+ * @param {string} responseType - 响应类型: 'json' | 'text' | 'blob'
+ * @returns {Promise} - 请求结果
+ */
+export function apiPatch(url, data = {}, options = {}, requiresAuth = true, responseType = 'json') {
+  return apiRequest(
+    url,
+    {
+      method: 'PATCH',
+      body: data instanceof FormData ? data : JSON.stringify(data),
+      ...options
+    },
+    requiresAuth,
+    responseType
+  )
 }
 
 

@@ -91,7 +91,7 @@ const router = createRouter({
         }
       ]
     },
-      {
+    {
       path: '/dashboard',
       name: 'dashboard',
       component: AppLayout,
@@ -101,6 +101,26 @@ const router = createRouter({
           name: 'DashboardComp',
           component: () => import('../views/DashboardView.vue'),
           meta: { keepAlive: false, requiresAuth: true, requiresAdmin: true }
+        }
+      ]
+    },
+    {
+      path: '/mcp-market',
+      name: 'mcp-market',
+      component: AppLayout,
+      meta: { requiresAuth: true },
+      children: [
+        {
+          path: '',
+          name: 'MCPMarket',
+          component: () => import('../views/mcp/MCPMarketView.vue'),
+          meta: { keepAlive: true, requiresAuth: true }
+        },
+        {
+          path: 'detail/:mcpId',
+          name: 'MCPToolDetail',
+          component: () => import('../views/mcp/MCPToolDetailView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
         }
       ]
     },

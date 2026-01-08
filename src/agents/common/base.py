@@ -195,8 +195,12 @@ class BaseAgent:
                 raise RuntimeError("POSTGRES_URI 未配置，无法初始化智能体 checkpointer")
 
             from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            from sqlalchemy.engine.url import make_url
 
-            conn_string = postgres_uri.replace("postgresql+asyncpg://", "postgresql://")
+            url = make_url(postgres_uri)
+            if url.host == "localhost":
+                url = url.set(host="127.0.0.1")
+            conn_string = url.set(drivername="postgresql").render_as_string(hide_password=False)
             self._checkpointer_cm = AsyncPostgresSaver.from_conn_string(conn_string)
             self.checkpointer = await self._checkpointer_cm.__aenter__()
             await self.checkpointer.setup()

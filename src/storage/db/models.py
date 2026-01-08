@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -389,3 +389,73 @@ class MessageFeedback(Base):
             "reason": self.reason,
             "created_at": format_utc_datetime(self.created_at),
         }
+
+
+class MCPMarketplace(Base):
+    """MCP marketplace metadata."""
+
+    __tablename__ = "mcp_marketplace"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mcp_id = Column(String(128), unique=True, nullable=False, index=True)
+
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    category = Column(String(64), nullable=True, index=True)
+    tags = Column(JSON, nullable=True)
+    icon_url = Column(String(512), nullable=True)
+
+    transport = Column(String(32), nullable=False, default="streamable_http")
+    config_template = Column(JSON, nullable=False, default=dict)
+
+    author = Column(String(255), nullable=True)
+    version = Column(String(32), nullable=True)
+    homepage_url = Column(String(512), nullable=True)
+    documentation_url = Column(String(512), nullable=True)
+    examples = Column(JSON, nullable=True)
+
+    status = Column(String(32), nullable=False, default="active", index=True)  # active/deprecated/disabled/private
+    is_official = Column(Boolean, nullable=False, default=False)
+
+    install_count = Column(Integer, nullable=False, default=0)
+    rating_avg = Column(Float, nullable=True)
+    rating_count = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+
+class UserMCPConfig(Base):
+    """User-installed MCP config."""
+
+    __tablename__ = "user_mcp_configs"
+    __table_args__ = (UniqueConstraint("user_id", "mcp_id", name="uq_user_mcp"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    mcp_id = Column(String(128), ForeignKey("mcp_marketplace.mcp_id"), nullable=False, index=True)
+
+    server_name = Column(String(128), unique=True, nullable=True, index=True)
+    custom_name = Column(String(255), nullable=True)
+    config = Column(JSON, nullable=False, default=dict)
+
+    is_enabled = Column(Boolean, nullable=False, default=True, index=True)
+    status = Column(String(32), nullable=False, default="active")
+    last_error = Column(Text, nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class MCPRating(Base):
+    __tablename__ = "mcp_ratings"
+    __table_args__ = (UniqueConstraint("user_id", "mcp_id", name="uq_mcp_rating_user"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    mcp_id = Column(String(128), ForeignKey("mcp_marketplace.mcp_id"), nullable=False, index=True)
+    rating = Column(Integer, nullable=False)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)

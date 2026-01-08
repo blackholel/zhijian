@@ -37,7 +37,7 @@ MCP_SERVERS = {
 
 
 async def get_mcp_client(
-    server_configs: dict[str, Any] | None = None,
+    server_configs: dict[str, Any],
 ) -> MultiServerMCPClient | None:
     """Initializes an MCP client with the given server configurations."""
     try:
@@ -49,7 +49,9 @@ async def get_mcp_client(
         return None
 
 
-async def get_mcp_tools(server_name: str, additional_servers: dict[str, dict] = None) -> list[Callable[..., Any]]:
+async def get_mcp_tools(
+    server_name: str, additional_servers: dict[str, dict[str, Any]] | None = None
+) -> list[Callable[..., Any]]:
     """Get MCP tools for a specific server, initializing client if needed."""
     global _mcp_tools_cache
 
@@ -96,7 +98,10 @@ def add_mcp_server(name: str, config: dict[str, Any]) -> None:
     clear_mcp_cache()
 
 
-def clear_mcp_cache() -> None:
+def clear_mcp_cache(server_name: str | None = None) -> None:
     """Clear the MCP tools cache (useful for testing)."""
     global _mcp_tools_cache
+    if server_name:
+        _mcp_tools_cache.pop(server_name, None)
+        return
     _mcp_tools_cache = {}

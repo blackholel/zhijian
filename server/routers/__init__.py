@@ -9,6 +9,9 @@ from server.routers.evaluation_router import evaluation
 from server.routers.mindmap_router import mindmap
 from server.routers.system_router import system
 from server.routers.task_router import tasks
+from server.routers.mcp_market_router import mcp_market
+from server.routers.mcp_user_router import mcp_user
+from server.routers.mcp_admin_router import mcp_admin
 
 router = APIRouter()
 
@@ -22,3 +25,6 @@ router.include_router(evaluation)  # /api/evaluation/*
 router.include_router(mindmap)  # /api/mindmap/*
 router.include_router(graph)  # /api/graph/*
 router.include_router(tasks)  # /api/tasks/*
+router.include_router(mcp_market)  # /api/mcp-market/*
+router.include_router(mcp_user)  # /api/mcp/user/*
+router.include_router(mcp_admin)  # /api/mcp/admin/*

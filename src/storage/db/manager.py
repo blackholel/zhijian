@@ -4,6 +4,7 @@ import os
 from contextlib import asynccontextmanager, contextmanager
 
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -20,7 +21,10 @@ class DBManager(metaclass=SingletonMeta):
         if not raw_url or not raw_url.startswith("postgresql"):
             raise ValueError("POSTGRES_URI 未配置或不是 postgresql 连接串，无法初始化数据库")
 
-        self.db_url = raw_url
+        url = make_url(raw_url)
+        if url.host == "localhost":
+            url = url.set(host="127.0.0.1")
+        self.db_url = url.render_as_string(hide_password=False)
 
         self.async_engine = create_async_engine(
             self.db_url,

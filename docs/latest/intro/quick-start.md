@@ -78,18 +78,57 @@ docker compose up --build
 docker compose up --build -d
 ```
 
+### 本地联调（仅启动前后端）
+
+如果你只在本机启动前后端进行联调（不使用 Docker Compose 的 `api-dev/web-dev`），可以按以下方式启动：
+
+1) 确保根目录 `.env` 中已配置依赖服务地址（如 `POSTGRES_URI`、`MILVUS_URI`、`NEO4J_URI` 等），这些服务可以是本机或外部服务。
+
+2) 启动后端（默认端口 `5050`）：
+
+```bash
+uv run uvicorn server.main:app --reload --host 127.0.0.1 --port 5050
+```
+
+3) 启动前端（Vite 通过代理转发 `/api/*` 到后端）：
+
+```bash
+cd web
+VITE_API_URL=http://127.0.0.1:5050 corepack pnpm dev -- --host
+```
+
+::: tip 提示
+建议使用 `127.0.0.1` 而不是 `localhost`：在部分 macOS 环境下 `localhost -> ::1(IPv6)` 会导致前端代理出现 `EPIPE/Broken pipe`。
+:::
+
+4) 首次启动初始化超级管理员（可选）
+
+首次启动打开页面会提示初始化；也可以直接调用接口：
+
+```bash
+curl -X POST http://127.0.0.1:5050/api/auth/initialize \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"admin","password":"your_password"}'
+```
+
 #### 4. 访问系统
 
 服务启动完成后，访问以下地址：
 
-- **Web 界面**: `http://localhost:5173`
-- **API 文档**: `http://localhost:5050/docs`
+::: tip 提示
+建议使用 `127.0.0.1` 而不是 `localhost`：在部分 macOS 环境下 `localhost -> ::1(IPv6)` 可能导致浏览器连接 `5173/5050` 失败（表现为 `ERR_SOCKET_NOT_CONNECTED` / `Failed to fetch dynamically imported module`）。
+:::
+
+- **Web 界面**: `http://127.0.0.1:5173`
+- **API 文档**: `http://127.0.0.1:5050/docs`
 
 #### 5. 停止服务
 
 ```bash
 docker compose down
 ```
+
+如果你是本地启动前后端（非 Docker），直接在对应终端 `Ctrl+C` 停止进程即可。
 
 ## 对话
 

@@ -8,9 +8,10 @@ from fastapi.responses import StreamingResponse
 from langchain.messages import AIMessageChunk, HumanMessage, AIMessage
 from langgraph.types import Command
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.storage.db.models import User, Conversation
+from src.storage.db.models import Conversation, User, UserMCPConfig
 from src.storage.conversation import ConversationManager
 from src.storage.db.manager import db_manager
 from server.routers.auth_router import get_admin_user
@@ -45,6 +46,23 @@ class ImageUploadResponse(BaseModel):
 
 
 chat = APIRouter(prefix="/chat", tags=["chat"])
+
+
+async def _get_user_enabled_mcp_servers(db: AsyncSession, user_id: int) -> list[str]:
+    stmt = select(UserMCPConfig).where(UserMCPConfig.user_id == user_id, UserMCPConfig.is_enabled.is_(True))
+    configs = (await db.execute(stmt)).scalars().all()
+    return [cfg.server_name or f"user_{cfg.id}" for cfg in configs]
+
+
+def _merge_mcps(base: list[str] | None, extra: list[str] | None) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for name in (base or []) + (extra or []):
+        if not isinstance(name, str) or not name or name in seen:
+            continue
+        seen.add(name)
+        merged.append(name)
+    return merged
 
 # =============================================================================
 # > === 智能体管理分组 ===
@@ -549,6 +567,12 @@ async def chat_agent(
 
         input_context = {"user_id": user_id, "thread_id": thread_id}
         meta["thread_id"] = thread_id
+        try:
+            base_context = agent.context_schema.from_file(module_name=agent.module_name)
+            user_mcps = await _get_user_enabled_mcp_servers(db, current_user.id)
+            input_context["mcps"] = _merge_mcps(getattr(base_context, "mcps", None), user_mcps)
+        except Exception as e:
+            logger.warning(f"Failed to merge user MCP configs: {e}")
 
         try:
             conv_manager = ConversationManager(db)
@@ -807,6 +831,12 @@ async def resume_agent_chat(
 
         # 加载 context（包含 tools, model 等配置）
         input_context = {"user_id": str(current_user.id), "thread_id": thread_id}
+        try:
+            base_context = agent.context_schema.from_file(module_name=agent.module_name)
+            user_mcps = await _get_user_enabled_mcp_servers(db, current_user.id)
+            input_context["mcps"] = _merge_mcps(getattr(base_context, "mcps", None), user_mcps)
+        except Exception as e:
+            logger.warning(f"Failed to merge user MCP configs (resume): {e}")
         context = agent.context_schema.from_file(module_name=agent.module_name, input_context=input_context)
         logger.debug(f"Resume with context: {context}")
 
@@ -982,6 +1012,20 @@ async def get_agent_state(
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
+    def _is_checkpointer_connection_error(exc: BaseException) -> bool:
+        msg = str(exc).lower()
+        if "the connection is closed" in msg:
+            return True
+        if "could not receive data from server" in msg:
+            return True
+        if "consuming input failed" in msg:
+            return True
+        if hasattr(exc, "exceptions"):
+            for sub in getattr(exc, "exceptions", []) or []:
+                if _is_checkpointer_connection_error(sub):
+                    return True
+        return False
+
     try:
         if not agent_manager.get_agent(agent_id):
             raise HTTPException(status_code=404, detail=f"智能体 {agent_id} 不存在")
@@ -992,7 +1036,17 @@ async def get_agent_state(
         agent = agent_manager.get_agent(agent_id)
         graph = await agent.get_graph()
         langgraph_config = {"configurable": {"user_id": str(current_user.id), "thread_id": thread_id}}
-        state = await graph.aget_state(langgraph_config)
+        try:
+            state = await graph.aget_state(langgraph_config)
+        except Exception as e:
+            if _is_checkpointer_connection_error(e):
+                logger.warning(f"Checkpointer connection error, reinitializing and retrying once: {e}")
+                await agent.aclose()
+                agent.reload_graph()
+                graph = await agent.get_graph()
+                state = await graph.aget_state(langgraph_config)
+            else:
+                raise
         agent_state = _extract_agent_state(getattr(state, "values", {})) if state else {}
 
         return {"agent_state": agent_state}

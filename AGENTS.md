@@ -1,7 +1,11 @@
 
 # 项目目录结构 (Project Overview)
 
-Yuxi-Know 是一个基于大模型的智能知识库与知识图谱智能体开发平台，融合了 RAG 技术与知识图谱技术，基于 LangGraph v1 + Vue.js + FastAPI + LightRAG 架构构建。项目完全通过 Docker Compose 进行管理，支持热重载开发。
+Yuxi-Know 是一个基于大模型的智能知识库与知识图谱智能体开发平台，融合了 RAG 技术与知识图谱技术，基于 LangGraph v1 + Vue.js + FastAPI + LightRAG 架构构建。
+
+项目支持两种开发方式：
+- Docker Compose（全栈容器化，默认/推荐）
+- 本地开发（前后端在宿主机运行；依赖服务由宿主机或外部环境提供）
 
 ## 开发准则
 
@@ -15,9 +19,18 @@ Don't create helpers, utilities, or abstractions for one-time operations. Don't 
 
 ## 开发与调试工作流 (Development & Debugging Workflow)
 
-本项目完全通过 Docker Compose 进行管理。所有开发和调试都应在运行的容器环境中进行。使用 `docker compose up -d` 命令进行构建和启动。
+### 方式 1：Docker Compose（全栈）
 
-**核心原则**: 由于 api-dev 和 web-dev 服务均配置了热重载 (hot-reloading)，本地修改代码后无需重启容器，服务会自动更新。应该先检查项目是否已经在后台启动（`docker ps`），查看日志（`docker logs api-dev --tail 100`）具体的可以阅读 [docker-compose.yml](docker-compose.yml).
+- 启动：`docker compose up -d --build`
+- 看日志：`docker logs api-dev --tail 100` / `docker logs web-dev --tail 100`
+- 核心原则：`api-dev` / `web-dev` 都是热重载，本地改代码一般无需重启容器
+
+### 方式 2：本地开发（不使用 Docker 运行前后端）
+
+前提：Postgres / Milvus / Neo4j / Minio 等依赖服务已在本机或外部环境稳定运行，并在根目录 `.env` 中配置为可访问地址（建议使用 `127.0.0.1` 而非 `localhost`）。
+
+- 启动后端：`uv run uvicorn server.main:app --reload --host 127.0.0.1 --port 5050`
+- 启动前端：`cd web && VITE_API_URL=http://127.0.0.1:5050 corepack pnpm dev -- --host 127.0.0.1 --port 5173`
 
 ### 前端开发规范
 
@@ -25,7 +38,7 @@ Don't create helpers, utilities, or abstractions for one-time operations. Don't 
 - Icon 应该从 @ant-design/icons-vue 或者 lucide-vue-next （推荐，但是需要注意尺寸）
 - Vue 中的样式使用 less，非必要情况必须使用[base.css](web/src/assets/css/base.css) 中的颜色变量。
 - UI风格要简洁，同时要保持一致性，不要悬停位移，不要过度使用阴影以及渐变色。
-- 绝对不要尝试使用 npm/pnpm 等等运行前端开发服务器。
+- 本地启动前端请使用 `corepack pnpm`（不要用 `npm`）。
 
 
 ### 后端开发规范
@@ -35,8 +48,11 @@ Don't create helpers, utilities, or abstractions for one-time operations. Don't 
 make lint          # 检查代码规范
 make format        # 格式化代码
 
-# 直接在容器内执行命令
-docker compose exec api uv run python test/your_script.py  # 放在 test 文件夹
+# 本地执行
+uv run python test/your_script.py  # 放在 test 文件夹
+
+# 容器内执行（使用 Docker Compose 开发时）
+docker compose exec api uv run python test/your_script.py
 ```
 
 注意：
@@ -46,6 +62,6 @@ docker compose exec api uv run python test/your_script.py  # 放在 test 文件�
 
 **其他**：
 
-- 使用 YUXI_SUPER_ADMIN_NAME / YUXI_SUPER_ADMIN_PASSWORD 调试接口
+- 首次启动初始化超级管理员：UI 会提示创建；也可以直接调用 `POST /api/auth/initialize`（配合 `GET /api/auth/check-first-run` 判断是否需要初始化）
 - 如果需要新建说明文档（仅开发者可见，非必要不创建），则保存在 `docs/vibe` 文件夹下面
 - 代码更新后要检查文档部分是否有需要更新的地方，文档的目录定义在 `docs/.vitepress/config.mts` 中。文档应该更新最新版（`docs/latest`）

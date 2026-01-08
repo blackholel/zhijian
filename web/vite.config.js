@@ -4,6 +4,15 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
+  const rawTarget = env.VITE_API_URL || 'http://127.0.0.1:5050'
+  let proxyTarget = rawTarget
+  try {
+    const parsed = new URL(rawTarget)
+    if (parsed.hostname === 'localhost') parsed.hostname = '127.0.0.1'
+    proxyTarget = parsed.toString()
+  } catch {
+    // ignore invalid URL
+  }
   return {
     plugins: [vue()],
     resolve: {
@@ -14,7 +23,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         '^/api': {
-          target: env.VITE_API_URL || 'http://api:5050',
+          target: proxyTarget,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api/, '/api')
         }

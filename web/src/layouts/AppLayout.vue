@@ -2,7 +2,7 @@
 import { ref, reactive, onMounted, useTemplateRef, computed, provide } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { GithubOutlined } from '@ant-design/icons-vue'
-import { Bot, Waypoints, LibraryBig, BarChart3, CircleCheck } from 'lucide-vue-next';
+import { Bot, Waypoints, LibraryBig, BarChart3, CircleCheck, Package } from 'lucide-vue-next';
 import { onLongPress } from '@vueuse/core'
 
 import { useConfigStore } from '@/stores/config'
@@ -110,6 +110,7 @@ const mainList = computed(() => {
     return [
       { name: '对话', path: '/chat', icon: Bot, activeIcon: Bot },
       { name: '知识库', path: '/database', icon: LibraryBig, activeIcon: LibraryBig },
+      { name: 'MCP 市场', path: '/mcp-market', icon: Package, activeIcon: Package },
     ]
   }
 
@@ -117,6 +118,7 @@ const mainList = computed(() => {
     { name: '智能体', path: '/agent', icon: Bot, activeIcon: Bot },
     { name: '图谱', path: '/graph', icon: Waypoints, activeIcon: Waypoints },
     { name: '知识库', path: '/database', icon: LibraryBig, activeIcon: LibraryBig },
+    { name: 'MCP 市场', path: '/mcp-market', icon: Package, activeIcon: Package },
     { name: 'Dashboard', path: '/dashboard', icon: BarChart3, activeIcon: BarChart3 },
   ]
 })
@@ -206,6 +208,7 @@ provide('settingsModal', {
     <div class="header-mobile">
       <RouterLink :to="mobileChatPath" class="nav-item" active-class="active">对话</RouterLink>
       <RouterLink to="/database" class="nav-item" active-class="active">知识</RouterLink>
+      <RouterLink to="/mcp-market" class="nav-item" active-class="active">MCP</RouterLink>
     </div>
     <router-view v-slot="{ Component, route }" id="app-router-view">
       <keep-alive v-if="route.meta.keepAlive !== false">

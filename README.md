@@ -28,6 +28,52 @@
 
 ---
 
+## 本地开发（前后端不使用 Docker）
+
+适用场景：你的 Postgres / Milvus / Neo4j / Minio 等依赖服务已经在本机或外部环境启动并稳定可用，只希望在本机直接跑前后端进行开发调试。
+
+### 1) 配置 `.env`
+
+根目录复制并编辑：
+
+```bash
+cp .env.template .env
+```
+
+确保关键依赖地址指向你的本机/外部服务（建议使用 `127.0.0.1`，避免 `localhost -> ::1(IPv6)` 引发浏览器 `ERR_SOCKET_NOT_CONNECTED`）：
+
+```bash
+POSTGRES_URI=postgresql+asyncpg://<user>:<password>@127.0.0.1:5432/<db>
+NEO4J_URI=bolt://127.0.0.1:7687
+MILVUS_URI=http://127.0.0.1:19530
+MINIO_URI=http://127.0.0.1:9000
+```
+
+### 2) 启动后端（FastAPI）
+
+```bash
+uv run uvicorn server.main:app --reload --host 127.0.0.1 --port 5050
+```
+
+### 3) 启动前端（Vite）
+
+```bash
+cd web
+VITE_API_URL=http://127.0.0.1:5050 corepack pnpm dev -- --host 127.0.0.1 --port 5173
+```
+
+浏览器访问：`http://127.0.0.1:5173`
+
+### 4) 初始化超级管理员（首次启动）
+
+首次启动会提示创建超级管理员；也可以手动调用接口：
+
+```bash
+curl -X POST http://127.0.0.1:5050/api/auth/initialize \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"admin","password":"your_password"}'
+```
+
 **🎉 最新动态**
 
 
