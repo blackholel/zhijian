@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -13,6 +14,11 @@ from src.storage.db.models import MCPMarketplace, MCPRating, User
 mcp_market = APIRouter(prefix="/mcp-market", tags=["mcp-market"])
 
 
+def _escape_like_pattern(value: str) -> str:
+    """Escape SQL LIKE wildcards to prevent pattern injection."""
+    return re.sub(r"([%_\\])", r"\\\1", value)
+
+
 class MarketToolListResponse(BaseModel):
     total: int
     page: int
@@ -22,8 +28,8 @@ class MarketToolListResponse(BaseModel):
 
 @mcp_market.get("/tools", response_model=MarketToolListResponse)
 async def list_market_tools(
-    category: str | None = Query(None),
-    search: str | None = Query(None),
+    category: str | None = Query(None, max_length=64),
+    search: str | None = Query(None, max_length=100),
     sort: Literal["popular", "latest", "rating"] = Query("popular"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -33,7 +39,8 @@ async def list_market_tools(
     if category:
         stmt = stmt.where(MCPMarketplace.category == category)
     if search:
-        like = f"%{search.strip()}%"
+        escaped = _escape_like_pattern(search.strip())
+        like = f"%{escaped}%"
         stmt = stmt.where((MCPMarketplace.name.ilike(like)) | (MCPMarketplace.description.ilike(like)))
 
     count_stmt = select(func.count()).select_from(stmt.subquery())

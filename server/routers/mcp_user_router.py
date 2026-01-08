@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import socket
 import uuid
 from typing import Any
 from urllib.parse import urlparse
@@ -19,6 +21,22 @@ from src.utils.mcp_utils import build_env_status, decrypt_env_values, encrypt_en
 mcp_user = APIRouter(prefix="/mcp/user", tags=["mcp-user"])
 
 
+def _is_private_or_reserved_ip(ip_str: str) -> bool:
+    """Check if an IP address is private, loopback, link-local, or otherwise reserved."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        )
+    except ValueError:
+        return False
+
+
 def _validate_streamable_http_url(raw_url: str) -> None:
     parsed = urlparse(raw_url)
     if parsed.scheme not in {"http", "https"}:
@@ -26,10 +44,25 @@ def _validate_streamable_http_url(raw_url: str) -> None:
     host = (parsed.hostname or "").lower()
     if not host:
         raise HTTPException(status_code=422, detail="url host is required")
+
+    # Block localhost and .local domains
     if host in {"localhost"} or host.endswith(".local"):
         raise HTTPException(status_code=422, detail="localhost/.local is not allowed")
-    if host.startswith("127.") or host in {"0.0.0.0", "::1"}:
-        raise HTTPException(status_code=422, detail="loopback is not allowed")
+
+    # Check if host is an IP address directly
+    if _is_private_or_reserved_ip(host):
+        raise HTTPException(status_code=422, detail="private/reserved IP addresses are not allowed")
+
+    # Resolve hostname and check all resolved IPs
+    try:
+        resolved_ips = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for family, _, _, _, sockaddr in resolved_ips:
+            ip_str = sockaddr[0]
+            if _is_private_or_reserved_ip(ip_str):
+                raise HTTPException(status_code=422, detail="hostname resolves to private/reserved IP")
+    except socket.gaierror:
+        # DNS resolution failed - allow the request (will fail at connection time)
+        pass
 
 
 def _validate_stdio_command(command: str) -> None:
@@ -129,7 +162,14 @@ async def install_tool(
     db.add(user_config)
     await db.flush()
     user_config.server_name = f"user_{user_config.id}"
-    tool.install_count = int(tool.install_count or 0) + 1
+
+    # Use atomic increment to avoid race condition
+    await db.execute(
+        update(MCPMarketplace)
+        .where(MCPMarketplace.mcp_id == tool.mcp_id)
+        .values(install_count=MCPMarketplace.install_count + 1)
+    )
+
     return {"config_id": user_config.id, "mcp_id": tool.mcp_id, "server_name": user_config.server_name}
 
 
@@ -322,10 +362,17 @@ async def test_config(
         )
         return {"success": True, "tools_count": len(tools)}
     except TimeoutError:
-        return {"success": False, "error": "timeout"}
+        return {"success": False, "error": "Connection timeout"}
+    except ConnectionError as exc:
+        logger.warning(f"Failed to test MCP config {config_id}: {exc}")
+        return {"success": False, "error": "Connection failed"}
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"Failed to test MCP config {config_id}: {exc}")
-        return {"success": False, "error": str(exc)}
+        # Sanitize error message to avoid leaking sensitive information
+        error_msg = str(exc)
+        if any(kw in error_msg.lower() for kw in ("password", "secret", "token", "key", "credential")):
+            error_msg = "Configuration error"
+        return {"success": False, "error": error_msg}
 
 
 class ManualAddRequest(BaseModel):

@@ -118,9 +118,10 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
+import { useDebounceFn } from '@vueuse/core'
 import { useMCPStore } from '@/stores/mcp'
 import MCPToolCard from '@/components/mcp/MCPToolCard.vue'
 import MyMCPToolItem from '@/components/mcp/MyMCPToolItem.vue'
@@ -155,6 +156,14 @@ const isInstalled = computed(() => mcpStore.isInstalled)
 
 const handleFilterChange = () => mcpStore.fetchMarketTools(true)
 const handlePageChange = () => mcpStore.fetchMarketTools()
+
+// Debounced search for input changes
+const debouncedSearch = useDebounceFn(() => {
+  mcpStore.fetchMarketTools(true)
+}, 300)
+
+// Watch search input for debounced search
+watch(() => filters.value.search, debouncedSearch)
 
 const resetFilters = () => {
   mcpStore.resetFilters()
@@ -228,8 +237,8 @@ const handleManualSubmit = async () => {
   let config
   try {
     config = JSON.parse(manualForm.value.json || '')
-  } catch {
-    message.error('JSON 解析失败')
+  } catch (e) {
+    message.error(`JSON 解析失败: ${e.message}`)
     return
   }
   try {
