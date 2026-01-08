@@ -735,49 +735,30 @@ async def get_call_timeseries_stats(
     try:
         from src.storage.db.models import Conversation, Message, ToolCall
 
-        # Determine dialect
-        dialect_name = "sqlite"
-        if db.bind:
-            dialect_name = db.bind.dialect.name
-
         def get_date_group_expression(col, range_type):
-            if dialect_name == "postgresql":
-                # For PostgreSQL, use to_char with interval addition
-                # 'IW' is ISO week number (01-53)
-                # 'HH24' is 24-hour clock
-                col_adjusted = col + text("INTERVAL '8 hours'")
-                if range_type == "14hours":
-                    return func.to_char(col_adjusted, "YYYY-MM-DD HH24:00")
-                elif range_type == "14weeks":
-                    return func.to_char(col_adjusted, "YYYY-IW")
-                else:
-                    return func.to_char(col_adjusted, "YYYY-MM-DD")
+            # PostgreSQL: use to_char with interval addition
+            # 'IW' is ISO week number (01-53)
+            # 'HH24' is 24-hour clock
+            col_adjusted = col + text("INTERVAL '8 hours'")
+            if range_type == "14hours":
+                return func.to_char(col_adjusted, "YYYY-MM-DD HH24:00")
+            elif range_type == "14weeks":
+                return func.to_char(col_adjusted, "YYYY-IW")
             else:
-                # SQLite
-                if range_type == "14hours":
-                    return func.strftime("%Y-%m-%d %H:00", func.datetime(col, "+8 hours"))
-                elif range_type == "14weeks":
-                    return func.strftime("%Y-%W", func.datetime(col, "+8 hours"))
-                else:
-                    return func.strftime("%Y-%m-%d", func.datetime(col, "+8 hours"))
+                return func.to_char(col_adjusted, "YYYY-MM-DD")
 
         def get_json_field(col, path, cast_type=None):
             """
-            Cross-database JSON extraction.
+            PostgreSQL JSON extraction.
             path format: "$.key1.key2"
             """
-            if dialect_name == "postgresql":
-                # PostgreSQL: Use json_extract_path_text
-                # Parse path "$.a.b" -> ['a', 'b']
-                keys = path.replace("$.", "").split(".")
-                expr = func.json_extract_path_text(col, *keys)
-                if cast_type:
-                    return cast(expr, cast_type)
-                return expr
-            else:
-                # SQLite: Use json_extract
-                expr = func.json_extract(col, path)
-                return expr
+            # PostgreSQL: Use json_extract_path_text
+            # Parse path "$.a.b" -> ['a', 'b']
+            keys = path.replace("$.", "").split(".")
+            expr = func.json_extract_path_text(col, *keys)
+            if cast_type:
+                return cast(expr, cast_type)
+            return expr
 
         # 计算时间范围（使用北京时间 UTC+8）
         now = utc_now()

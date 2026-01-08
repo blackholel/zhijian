@@ -85,8 +85,6 @@ class DBManager(metaclass=SingletonMeta):
             logger.error(f"Async database operation failed: {e}")
             raise
         finally:
-            # Shield close operation to ensure connection is properly closed even if task is cancelled
-            # This prevents aiosqlite from raising errors during cancellation
             await asyncio.shield(session.close())
 
     def get_async_session_factory(self) -> async_sessionmaker[AsyncSession]:

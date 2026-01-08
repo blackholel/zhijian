@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "asyncpg>=0.30.0",
-    "aiosqlite>=0.20.0",
     "sqlalchemy[asyncio]>=2.0.0",
     "langchain>=1.2.0",
     "langchain-core >= 1.2.5",
@@ -24,7 +23,6 @@ dependencies = [
     "langchain-text-splitters>=1.0",
     "langgraph>=1.0.1",
     "langgraph-checkpoint-postgres>=2.0.0",
-    "langgraph-checkpoint-sqlite>=3.0",
     "psycopg2-binary>=2.9.0",
     "langgraph-cli[inmem]>=0.4",
     "langsmith>=0.4",

@@ -252,7 +252,6 @@ class User(Base):
     operation_logs = relationship("OperationLog", back_populates="user", cascade="all, delete-orphan")
 
     def to_dict(self, include_password=False):
-        # SQLite 存储 naive datetime，需要标记为 UTC 后再转换
         def format_utc_datetime(dt_value):
             if dt_value is None:
                 return None

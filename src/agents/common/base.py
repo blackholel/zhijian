@@ -174,7 +174,6 @@ class BaseAgent:
         """
         获取并编译对话图实例。
         必须确保在编译时设置 checkpointer，否则将无法获取历史记录。
-        例如: graph = workflow.compile(checkpointer=sqlite_checkpointer)
         """
         pass
 
