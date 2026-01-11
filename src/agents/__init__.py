@@ -52,11 +52,14 @@ class AgentManager(metaclass=SingletonMeta):
         # 获取 agents 目录的路径
         agents_dir = Path(__file__).parent
 
+        # 需要跳过的目录（不自动发现）
+        skip_dirs = {"common", "dynamic"}
+
         # 遍历所有子目录
         for item in agents_dir.iterdir():
             logger.info(f"尝试导入模块：{item}")
-            # 跳过非目录、common 目录、__pycache__ 等
-            if not item.is_dir() or item.name.startswith("_") or item.name == "common":
+            # 跳过非目录、common 目录、dynamic 目录、__pycache__ 等
+            if not item.is_dir() or item.name.startswith("_") or item.name in skip_dirs:
                 continue
 
             # 检查是否有 __init__.py 文件

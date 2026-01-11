@@ -7,7 +7,7 @@
           <span class="logo-text">{{ infoStore.organization.name }}</span>
         </div>
         <nav class="nav-links">
-          <router-link to="/agent" class="nav-link" v-if="userStore.isLoggedIn && userStore.isAdmin">
+          <router-link to="/agent" class="nav-link" v-if="userStore.isLoggedIn">
             <span>智能体</span>
           </router-link>
           <router-link to="/graph" class="nav-link" v-if="userStore.isLoggedIn && userStore.isAdmin">

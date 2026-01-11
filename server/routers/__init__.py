@@ -12,6 +12,7 @@ from server.routers.task_router import tasks
 from server.routers.mcp_market_router import mcp_market
 from server.routers.mcp_user_router import mcp_user
 from server.routers.mcp_admin_router import mcp_admin
+from server.routers.agent_manage_router import agent_manage
 
 router = APIRouter()
 
@@ -28,3 +29,4 @@ router.include_router(tasks)  # /api/tasks/*
 router.include_router(mcp_market)  # /api/mcp-market/*
 router.include_router(mcp_user)  # /api/mcp/user/*
 router.include_router(mcp_admin)  # /api/mcp/admin/*
+router.include_router(agent_manage)  # /api/agents/*

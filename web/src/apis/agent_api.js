@@ -271,3 +271,58 @@ export const threadApi = {
    */
   deleteThreadAttachment: (threadId, fileId) => apiDelete(`/api/chat/thread/${threadId}/attachments/${fileId}`)
 };
+
+
+// =============================================================================
+// === 智能体管理分组 ===
+// =============================================================================
+
+export const agentManageApi = {
+  /**
+   * 获取用户可见的智能体列表（分组返回）
+   * @returns {Promise} - { builtin: [], my_agents: [], public: [] }
+   */
+  list: () => apiGet('/api/agents'),
+
+  /**
+   * 获取可用的底层智能体列表
+   * @returns {Promise} - { base_agents: [] }
+   */
+  listBaseAgents: () => apiGet('/api/agents/base-agents'),
+
+  /**
+   * 获取单个智能体详情（含配置）
+   * @param {string} agentId - 智能体ID
+   * @returns {Promise} - 智能体详情
+   */
+  get: (agentId) => apiGet(`/api/agents/${agentId}`),
+
+  /**
+   * 创建自定义智能体
+   * @param {Object} data - 智能体配置
+   * @returns {Promise} - 创建的智能体
+   */
+  create: (data) => apiPost('/api/agents', data),
+
+  /**
+   * 更新智能体配置
+   * @param {string} agentId - 智能体ID
+   * @param {Object} data - 更新的配置
+   * @returns {Promise} - 更新后的智能体
+   */
+  update: (agentId, data) => apiPut(`/api/agents/${agentId}`, data),
+
+  /**
+   * 删除智能体（软删除）
+   * @param {string} agentId - 智能体ID
+   * @returns {Promise} - 删除结果
+   */
+  delete: (agentId) => apiDelete(`/api/agents/${agentId}`),
+
+  /**
+   * 复制智能体
+   * @param {string} agentId - 源智能体ID
+   * @returns {Promise} - 复制后的智能体
+   */
+  duplicate: (agentId) => apiPost(`/api/agents/${agentId}/duplicate`),
+};

@@ -82,7 +82,7 @@ const { agents, defaultAgentId } = storeToRefs(agentStore);
 // 当前智能体名称
 const currentAgentName = computed(() => {
   if (!agentId.value || !agents.value?.length) return '智能体加载中……';
-  const agent = agents.value.find(a => a.id === agentId.value);
+  const agent = agents.value.find(a => a.agent_id === agentId.value || a.id === agentId.value);
   return agent ? agent.name : '未知智能体';
 });
 

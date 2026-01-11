@@ -108,7 +108,7 @@ const activeTaskCount = computed(() => activeCountRef.value || 0)
 const mainList = computed(() => {
   if (!userStore.isAdmin) {
     return [
-      { name: '对话', path: '/chat', icon: Bot, activeIcon: Bot },
+      { name: '智能体', path: '/agent', icon: Bot, activeIcon: Bot },
       { name: '知识库', path: '/database', icon: LibraryBig, activeIcon: LibraryBig },
       { name: 'MCP 市场', path: '/mcp-market', icon: Package, activeIcon: Package },
     ]
@@ -123,7 +123,7 @@ const mainList = computed(() => {
   ]
 })
 
-const mobileChatPath = computed(() => (userStore.isAdmin ? '/agent' : '/chat'))
+const mobileChatPath = computed(() => '/agent')
 
 // Provide settings modal methods to child components
 provide('settingsModal', {

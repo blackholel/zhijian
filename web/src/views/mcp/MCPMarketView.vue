@@ -236,11 +236,39 @@ const handleManualSubmit = async () => {
   }
   let config
   try {
-    config = JSON.parse(manualForm.value.json || '')
+    const parsed = JSON.parse(manualForm.value.json || '{}')
+
+    // 兼容 Claude Desktop 格式: { "mcpServers": { "name": { "url": "..." } } }
+    if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+      const serverNames = Object.keys(parsed.mcpServers)
+      if (serverNames.length === 0) {
+        message.error('mcpServers 中没有找到服务器配置')
+        return
+      }
+      if (serverNames.length > 1) {
+        message.error('一次只能添加一个 MCP 服务器，请分开添加')
+        return
+      }
+      // 提取第一个服务器配置
+      config = parsed.mcpServers[serverNames[0]]
+      // 如果用户没有填写名称，使用配置中的服务器名
+      if (!manualForm.value.name?.trim()) {
+        manualForm.value.name = serverNames[0]
+      }
+    } else {
+      config = parsed
+    }
   } catch (e) {
     message.error(`JSON 解析失败: ${e.message}`)
     return
   }
+
+  // 验证必要字段
+  if (!config.url && !config.command) {
+    message.error('请在 JSON 配置中提供 url（HTTP 类型）或 command（stdio 类型）')
+    return
+  }
+
   try {
     await mcpStore.manualAdd({
       name: manualForm.value.name.trim(),

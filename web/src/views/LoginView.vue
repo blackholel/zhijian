@@ -364,25 +364,8 @@ const handleLogin = async () => {
       try {
         // 初始化agentStore并获取智能体信息
         await agentStore.initialize();
-
-        if (userStore.isAdmin) {
-          router.push('/agent');
-          return;
-        }
-
-        const defaultAgent = agentStore.defaultAgent;
-        if (defaultAgent?.id) {
-          router.push(`/chat/${defaultAgent.id}`);
-          return;
-        }
-
-        const firstAgentId = (agentStore.agents || []).map(a => a.id).find(Boolean);
-        if (firstAgentId) {
-          router.push(`/chat/${firstAgentId}`);
-          return;
-        }
-
-        router.push('/');
+        // 所有用户都跳转到智能体页面
+        router.push('/agent');
       } catch (error) {
         console.error('获取智能体信息失败:', error);
         router.push('/');

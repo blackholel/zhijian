@@ -830,9 +830,7 @@ async def get_call_timeseries_stats(
             input_query_result = await db.execute(
                 select(
                     group_format.label("date"),
-                    func.sum(
-                        func.coalesce(input_tokens_expr, 0)
-                    ).label("count"),
+                    func.sum(func.coalesce(input_tokens_expr, 0)).label("count"),
                     literal("input_tokens").label("category"),
                 )
                 .filter(
@@ -851,9 +849,7 @@ async def get_call_timeseries_stats(
             output_query_result = await db.execute(
                 select(
                     group_format.label("date"),
-                    func.sum(
-                        func.coalesce(output_tokens_expr, 0)
-                    ).label("count"),
+                    func.sum(func.coalesce(output_tokens_expr, 0)).label("count"),
                     literal("output_tokens").label("category"),
                 )
                 .filter(

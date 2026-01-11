@@ -9,6 +9,21 @@
           </div>
         </div>
       </div>
+
+      <!-- 智能体列表区域 -->
+      <AgentListSection
+        v-if="showAgentList"
+        :builtin-agents="builtinAgents"
+        :my-agents="myAgents"
+        :public-agents="publicAgents"
+        :selected-agent-id="selectedAgentId"
+        @select-agent="handleSelectAgent"
+        @create-agent="handleCreateAgent"
+        @edit-agent="handleEditAgent"
+        @delete-agent="handleDeleteAgent"
+        @duplicate-agent="handleDuplicateAgent"
+      />
+
       <div class="conversation-list-top">
         <button type="text" @click="createNewChat" class="new-chat-btn" :disabled="chatUIStore.creatingNewChat">
           <LoaderCircle v-if="chatUIStore.creatingNewChat" size="20" class="loading-icon" />
@@ -70,6 +85,7 @@ import dayjs, { parseToShanghai } from '@/utils/time';
 import { useChatUIStore } from '@/stores/chatUI';
 import { useInfoStore } from '@/stores/info';
 import { storeToRefs } from 'pinia';
+import AgentListSection from './AgentListSection.vue';
 
 // 使用 chatUI store
 const chatUIStore = useChatUIStore();
@@ -105,10 +121,39 @@ const props = defineProps({
   selectedAgentId: {
     type: String,
     default: null
+  },
+  // 智能体分组数据
+  builtinAgents: {
+    type: Array,
+    default: () => []
+  },
+  myAgents: {
+    type: Array,
+    default: () => []
+  },
+  publicAgents: {
+    type: Array,
+    default: () => []
+  },
+  showAgentList: {
+    type: Boolean,
+    default: false
   }
 });
 
-const emit = defineEmits(['create-chat', 'select-chat', 'delete-chat', 'rename-chat', 'toggle-sidebar', 'open-agent-modal']);
+const emit = defineEmits([
+  'create-chat',
+  'select-chat',
+  'delete-chat',
+  'rename-chat',
+  'toggle-sidebar',
+  'open-agent-modal',
+  'select-agent',
+  'create-agent',
+  'edit-agent',
+  'delete-agent',
+  'duplicate-agent'
+]);
 
 
 
@@ -211,6 +256,37 @@ const renameChat = async (chatId) => {
 const toggleCollapse = () => {
   emit('toggle-sidebar');
 };
+
+// 智能体相关处理函数
+const handleSelectAgent = (agentId) => {
+  emit('select-agent', agentId);
+};
+
+const handleCreateAgent = () => {
+  emit('create-agent');
+};
+
+const handleEditAgent = (agentId) => {
+  emit('edit-agent', agentId);
+};
+
+const handleDeleteAgent = (agentId) => {
+  Modal.confirm({
+    title: '删除智能体',
+    content: '确定要删除这个智能体吗？删除后无法恢复。',
+    okText: '删除',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk: () => {
+      emit('delete-agent', agentId);
+    }
+  });
+};
+
+const handleDuplicateAgent = (agentId) => {
+  emit('duplicate-agent', agentId);
+};
+
 
 </script>
 

@@ -9,12 +9,21 @@
       :agents="agents"
       :selected-agent-id="currentAgentId"
       :is-creating-new-chat="chatUIStore.creatingNewChat"
+      :show-agent-list="props.showAgentList"
+      :builtin-agents="props.builtinAgents"
+      :my-agents="props.myAgents"
+      :public-agents="props.publicAgents"
       @create-chat="createNewChat"
       @select-chat="selectChat"
       @delete-chat="deleteChat"
       @rename-chat="renameChat"
       @toggle-sidebar="toggleSidebar"
       @open-agent-modal="openAgentModal"
+      @select-agent="(id) => emit('select-agent', id)"
+      @create-agent="() => emit('create-agent')"
+      @edit-agent="(id) => emit('edit-agent', id)"
+      @delete-agent="(id) => emit('delete-agent', id)"
+      @duplicate-agent="(id) => emit('duplicate-agent', id)"
       :class="{
         'floating-sidebar': isSmallContainer,
         'sidebar-open': chatUIStore.isSidebarOpen,
@@ -187,9 +196,21 @@ import AgentPopover from '@/components/AgentPopover.vue';
 // ==================== PROPS & EMITS ====================
 const props = defineProps({
   agentId: { type: String, default: '' },
-  singleMode: { type: Boolean, default: true }
+  singleMode: { type: Boolean, default: true },
+  showAgentList: { type: Boolean, default: false },
+  builtinAgents: { type: Array, default: () => [] },
+  myAgents: { type: Array, default: () => [] },
+  publicAgents: { type: Array, default: () => [] }
 });
-const emit = defineEmits(['open-config', 'open-agent-modal']);
+const emit = defineEmits([
+  'open-config',
+  'open-agent-modal',
+  'select-agent',
+  'create-agent',
+  'edit-agent',
+  'delete-agent',
+  'duplicate-agent'
+]);
 
 // ==================== STORE MANAGEMENT ====================
 const agentStore = useAgentStore();
@@ -208,7 +229,7 @@ const exampleQuestions = computed(() => {
   const agentId = currentAgentId.value;
   let examples = [];
   if (agentId && agents.value && agents.value.length > 0) {
-    const agent = agents.value.find(a => a.id === agentId);
+    const agent = agents.value.find(a => a.agent_id === agentId || a.id === agentId);
     examples = agent ? (agent.examples || []) : [];
   }
   return examples.map((text, index) => ({
@@ -257,7 +278,7 @@ const currentAgentId = computed(() => {
 const currentAgentName = computed(() => {
   const agentId = currentAgentId.value;
   if (agentId && agents.value && agents.value.length > 0) {
-    const agent = agents.value.find(a => a.id === agentId);
+    const agent = agents.value.find(a => a.agent_id === agentId || a.id === agentId);
     return agent ? agent.name : '智能体';
   }
   return '智能体加载中……';
@@ -265,7 +286,7 @@ const currentAgentName = computed(() => {
 
 const currentAgent = computed(() => {
   if (!currentAgentId.value || !agents.value || !agents.value.length) return null;
-  return agents.value.find(a => a.id === currentAgentId.value) || null;
+  return agents.value.find(a => a.agent_id === currentAgentId.value || a.id === currentAgentId.value) || null;
 });
 const chatsList = computed(() => threads.value || []);
 const currentChatId = computed(() => chatState.currentThreadId);
@@ -889,7 +910,7 @@ const buildExportPayload = () => {
   const agentId = currentAgentId.value;
   let agentDescription = '';
   if (agentId && agents.value && agents.value.length > 0) {
-    const agent = agents.value.find(a => a.id === agentId);
+    const agent = agents.value.find(a => a.agent_id === agentId || a.id === agentId);
     agentDescription = agent ? (agent.description || '') : '';
   }
 

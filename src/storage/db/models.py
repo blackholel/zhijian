@@ -415,6 +415,7 @@ class MCPMarketplace(Base):
 
     status = Column(String(32), nullable=False, default="active", index=True)  # active/deprecated/disabled/private
     is_official = Column(Boolean, nullable=False, default=False)
+    requires_approval = Column(Boolean, nullable=False, default=False)
 
     install_count = Column(Integer, nullable=False, default=0)
     rating_avg = Column(Float, nullable=True)
@@ -458,3 +459,84 @@ class MCPRating(Base):
     rating = Column(Integer, nullable=False)
     comment = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class Agent(Base):
+    """智能体模型 - 支持系统内置和用户自定义"""
+
+    __tablename__ = "agents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(String(64), unique=True, nullable=False, index=True)  # 唯一标识
+
+    # 基本信息
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    icon = Column(String(512), nullable=True)  # emoji 或 URL
+
+    # 类型与归属
+    agent_type = Column(String(32), nullable=False, default="custom", index=True)  # builtin/custom
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+
+    # 运行时配置
+    base_agent_id = Column(String(64), nullable=False, default="ChatbotAgent")
+    system_prompt = Column(Text, nullable=True)
+    model = Column(String(128), nullable=True)
+
+    # 工具与能力配置 (JSON)
+    tools = Column(JSON, nullable=True)
+    mcps = Column(JSON, nullable=True)
+    knowledges = Column(JSON, nullable=True)
+    capabilities = Column(JSON, nullable=True)
+    examples = Column(JSON, nullable=True)
+
+    # 可见性
+    visibility = Column(String(32), nullable=False, default="private", index=True)  # private/public
+
+    # 状态与时间
+    status = Column(String(32), nullable=False, default="active", index=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    # 关系
+    owner = relationship("User", backref="agents")
+
+    def to_dict(self, include_config: bool = False) -> dict:
+        """转换为字典"""
+
+        def format_utc_datetime(dt_value):
+            if dt_value is None:
+                return None
+            if dt_value.tzinfo is None:
+                dt_value = dt_value.replace(tzinfo=dt.UTC)
+            return utc_isoformat(dt_value)
+
+        result = {
+            "id": self.id,
+            "agent_id": self.agent_id,
+            "name": self.name,
+            "description": self.description,
+            "icon": self.icon,
+            "agent_type": self.agent_type,
+            "owner_id": self.owner_id,
+            "base_agent_id": self.base_agent_id,
+            "capabilities": self.capabilities or [],
+            "examples": self.examples or [],
+            "visibility": self.visibility,
+            "status": self.status,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+        if include_config:
+            result.update(
+                {
+                    "system_prompt": self.system_prompt,
+                    "model": self.model,
+                    "tools": self.tools or [],
+                    "mcps": self.mcps or [],
+                    "knowledges": self.knowledges or [],
+                }
+            )
+
+        return result

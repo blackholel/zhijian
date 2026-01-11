@@ -117,7 +117,9 @@ async def run_migration():
             if not await check_column_exists(session, "mcp_marketplace", "transport"):
                 print("    添加 transport 列...")
                 await session.execute(
-                    text("ALTER TABLE mcp_marketplace ADD COLUMN transport VARCHAR(32) NOT NULL DEFAULT 'streamable_http'")
+                    text(
+                        "ALTER TABLE mcp_marketplace ADD COLUMN transport VARCHAR(32) NOT NULL DEFAULT 'streamable_http'"
+                    )
                 )
 
         # 2. 创建 user_mcp_configs 表

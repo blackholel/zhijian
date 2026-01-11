@@ -40,9 +40,18 @@
         <AgentChatComponent
           ref="chatComponentRef"
           :single-mode="false"
+          :show-agent-list="true"
+          :builtin-agents="builtinAgents"
+          :my-agents="myAgents"
+          :public-agents="publicAgents"
           @open-config="toggleConf"
           @open-agent-modal="openAgentModal"
           @close-config-sidebar="() => chatUIStore.isConfigSidebarOpen = false"
+          @select-agent="handleSelectAgentFromSidebar"
+          @create-agent="openCreateAgentModal"
+          @edit-agent="openEditAgentModal"
+          @delete-agent="handleDeleteAgent"
+          @duplicate-agent="handleDuplicateAgent"
         >
           <template #header-right="{ isMediumContainer }">
             <div type="button" class="agent-nav-btn" @click="toggleConf">
@@ -64,6 +73,13 @@
 
       <!-- 反馈模态框 -->
       <FeedbackModalComponent ref="feedbackModal" :agent-id="selectedAgentId" />
+
+      <!-- 智能体创建/编辑弹窗 -->
+      <AgentCreateModal
+        v-model:open="agentModalOpen"
+        :agent-id="editingAgentId"
+        @success="handleAgentModalSuccess"
+      />
 
       <!-- 自定义更多菜单 -->
       <Teleport to="body">
@@ -99,7 +115,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, onMounted } from 'vue';
 import {
   StarOutlined,
   StarFilled,
@@ -112,6 +128,7 @@ import { Settings2, Ellipsis } from 'lucide-vue-next';
 import AgentChatComponent from '@/components/AgentChatComponent.vue';
 import AgentConfigSidebar from '@/components/AgentConfigSidebar.vue';
 import FeedbackModalComponent from '@/components/dashboard/FeedbackModalComponent.vue';
+import AgentCreateModal from '@/components/AgentCreateModal.vue';
 import { useUserStore } from '@/stores/user';
 import { useAgentStore } from '@/stores/agent';
 import { useChatUIStore } from '@/stores/chatUI';
@@ -135,7 +152,23 @@ const {
   agents,
   selectedAgentId,
   defaultAgentId,
+  builtinAgents,
+  myAgents,
+  publicAgents,
 } = storeToRefs(agentStore);
+
+// 智能体创建/编辑弹窗状态
+const agentModalOpen = ref(false);
+const editingAgentId = ref(null);
+
+// 初始化时获取分组智能体列表
+onMounted(async () => {
+  try {
+    await agentStore.fetchGroupedAgents();
+  } catch (err) {
+    console.error('Failed to fetch grouped agents:', err);
+  }
+});
 
 // 设置为默认智能体
 const setAsDefaultAgent = async (agentId) => {
@@ -265,6 +298,44 @@ const handlePreview = () => {
   if (selectedAgentId.value) {
     window.open(`/agent/${selectedAgentId.value}`, '_blank');
   }
+};
+
+// 智能体管理相关方法
+const openCreateAgentModal = () => {
+  editingAgentId.value = null;
+  agentModalOpen.value = true;
+};
+
+const openEditAgentModal = (agentId) => {
+  editingAgentId.value = agentId;
+  agentModalOpen.value = true;
+};
+
+const handleDeleteAgent = async (agentId) => {
+  try {
+    await agentStore.deleteCustomAgent(agentId);
+    message.success('智能体已删除');
+  } catch (err) {
+    message.error('删除失败');
+  }
+};
+
+const handleDuplicateAgent = async (agentId) => {
+  try {
+    await agentStore.duplicateAgent(agentId);
+    message.success('智能体已复制');
+  } catch (err) {
+    message.error('复制失败');
+  }
+};
+
+const handleAgentModalSuccess = async () => {
+  // 刷新智能体列表
+  await agentStore.fetchGroupedAgents();
+};
+
+const handleSelectAgentFromSidebar = (agentId) => {
+  selectAgent(agentId);
 };
 </script>
 

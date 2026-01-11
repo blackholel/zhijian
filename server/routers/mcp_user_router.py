@@ -313,10 +313,7 @@ async def list_available(current_user: User = Depends(get_required_user), db: As
     rows = (await db.execute(stmt)).scalars().all()
     items = [{"server_name": name, "source": "builtin"} for name in MCP_SERVERS.keys()]
     items.extend(
-        [
-            {"server_name": row.server_name or f"user_{row.id}", "source": "user", "mcp_id": row.mcp_id}
-            for row in rows
-        ]
+        [{"server_name": row.server_name or f"user_{row.id}", "source": "user", "mcp_id": row.mcp_id} for row in rows]
     )
     return {"items": items}
 

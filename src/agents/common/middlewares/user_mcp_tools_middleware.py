@@ -12,6 +12,9 @@ from src.storage.db.models import UserMCPConfig
 from src.utils import logger
 from src.utils.mcp_utils import decrypt_env_values
 
+# langchain_mcp_adapters 支持的配置字段
+_MCP_ALLOWED_KEYS = {"url", "transport", "command", "args", "env", "headers", "timeout", "sse_read_timeout"}
+
 
 class UserMCPToolsMiddleware(AgentMiddleware):
     """Inject MCP tools at runtime based on `context.mcps` (including `user_{config_id}`)."""
@@ -70,7 +73,9 @@ class UserMCPToolsMiddleware(AgentMiddleware):
                     except ValueError as exc:
                         logger.warning(f"Failed to decrypt MCP env for {server_name}: {exc}")
                         continue
-                injected_tools.extend(await get_mcp_tools(server_name, additional_servers={server_name: cfg}))
+                # 过滤掉 langchain_mcp_adapters 不支持的字段
+                filtered_cfg = {k: v for k, v in cfg.items() if k in _MCP_ALLOWED_KEYS}
+                injected_tools.extend(await get_mcp_tools(server_name, additional_servers={server_name: filtered_cfg}))
 
         if not injected_tools:
             return await handler(request)

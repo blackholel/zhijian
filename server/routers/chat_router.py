@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.storage.db.models import Conversation, User, UserMCPConfig
+from src.storage.db.models import Agent, Conversation, User, UserMCPConfig
 from src.storage.conversation import ConversationManager
 from src.storage.db.manager import db_manager
 from server.routers.auth_router import get_admin_user
@@ -63,6 +63,54 @@ def _merge_mcps(base: list[str] | None, extra: list[str] | None) -> list[str]:
         seen.add(name)
         merged.append(name)
     return merged
+
+
+async def _resolve_agent(agent_id: str, db: AsyncSession, user_id: int):
+    """
+    解析智能体：优先从数据库查找自定义智能体，否则使用代码定义的智能体
+
+    Args:
+        agent_id: 智能体ID
+        db: 数据库会话
+        user_id: 当前用户ID
+
+    Returns:
+        智能体实例（DynamicAgent 或 BaseAgent 子类）
+    """
+    from sqlalchemy import or_
+
+    # 1. 尝试从数据库查找
+    stmt = select(Agent).where(
+        Agent.agent_id == agent_id,
+        Agent.status == "active",
+        or_(
+            Agent.agent_type == "builtin",
+            Agent.owner_id == user_id,
+            Agent.visibility == "public",
+        ),
+    )
+    result = await db.execute(stmt)
+    db_agent = result.scalar_one_or_none()
+
+    if db_agent:
+        # 如果是内置智能体，仍然使用代码定义的实例
+        if db_agent.agent_type == "builtin":
+            try:
+                return agent_manager.get_agent(agent_id)
+            except KeyError:
+                pass
+
+        # 自定义智能体：使用 DynamicAgent 包装
+        from src.agents.dynamic import DynamicAgent
+
+        return DynamicAgent(db_agent)
+
+    # 2. 回退到代码定义的智能体
+    try:
+        return agent_manager.get_agent(agent_id)
+    except KeyError:
+        return None
+
 
 # =============================================================================
 # > === 智能体管理分组 ===
@@ -438,11 +486,16 @@ async def get_agent(current_user: User = Depends(get_required_user)):
 
 
 @chat.get("/agent/{agent_id}")
-async def get_single_agent(agent_id: str, current_user: User = Depends(get_required_user)):
+async def get_single_agent(
+    agent_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
     """获取指定智能体的完整信息（包含配置选项）（需要登录）"""
     try:
-        # 检查智能体是否存在
-        if not (agent := agent_manager.get_agent(agent_id)):
+        # 使用 _resolve_agent 支持数据库中的智能体
+        agent = await _resolve_agent(agent_id, db, current_user.id)
+        if not agent:
             raise HTTPException(status_code=404, detail=f"智能体 {agent_id} 不存在")
 
         # 获取智能体的完整信息（包含 configurable_items）
@@ -544,7 +597,9 @@ async def chat_agent(
             return
 
         try:
-            agent = agent_manager.get_agent(agent_id)
+            agent = await _resolve_agent(agent_id, db, current_user.id)
+            if not agent:
+                raise ValueError(f"智能体 {agent_id} 不存在")
         except Exception as e:
             logger.error(f"Error getting agent {agent_id}: {e}, {traceback.format_exc()}")
             yield make_chunk(
@@ -812,7 +867,10 @@ async def resume_agent_chat(
             )
 
         try:
-            agent = agent_manager.get_agent(agent_id)
+            # 使用 _resolve_agent 支持数据库中的自定义智能体
+            agent = await _resolve_agent(agent_id, db, current_user.id)
+            if not agent:
+                raise ValueError(f"智能体 {agent_id} 不存在")
         except Exception as e:
             logger.error(f"Error getting agent {agent_id}: {e}, {traceback.format_exc()}")
             yield (
@@ -938,7 +996,9 @@ async def get_agent_history(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        if not agent_manager.get_agent(agent_id):
+        # 使用 _resolve_agent 支持数据库中的智能体
+        agent = await _resolve_agent(agent_id, db, current_user.id)
+        if not agent:
             raise HTTPException(status_code=404, detail=f"智能体 {agent_id} 不存在")
 
         conv_manager = ConversationManager(db)
@@ -1027,7 +1087,9 @@ async def get_agent_state(
         return False
 
     try:
-        if not agent_manager.get_agent(agent_id):
+        # 使用 _resolve_agent 支持数据库中的智能体
+        agent = await _resolve_agent(agent_id, db, current_user.id)
+        if not agent:
             raise HTTPException(status_code=404, detail=f"智能体 {agent_id} 不存在")
 
         conv_manager = ConversationManager(db)
@@ -1058,11 +1120,16 @@ async def get_agent_state(
 
 
 @chat.get("/agent/{agent_id}/config")
-async def get_agent_config(agent_id: str, current_user: User = Depends(get_required_user)):
+async def get_agent_config(
+    agent_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
     """从YAML文件加载智能体配置（需要登录）"""
     try:
-        # 检查智能体是否存在
-        if not (agent := agent_manager.get_agent(agent_id)):
+        # 使用 _resolve_agent 支持数据库中的智能体
+        agent = await _resolve_agent(agent_id, db, current_user.id)
+        if not agent:
             raise HTTPException(status_code=404, detail=f"智能体 {agent_id} 不存在")
 
         config = await agent.get_config()

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { agentApi } from '@/apis/agent_api'
+import { agentApi, agentManageApi } from '@/apis/agent_api'
 import { handleChatError } from '@/utils/errorHandler'
 import { useUserStore } from '@/stores/user'
 
@@ -11,6 +11,11 @@ export const useAgentStore = defineStore('agent', () => {
   const agents = ref([])
   const selectedAgentId = ref(null)
   const defaultAgentId = ref(null)
+
+  // 智能体分组状态（新增）
+  const builtinAgents = ref([])
+  const myAgents = ref([])
+  const publicAgents = ref([])
 
   // 智能体配置相关状态
   const agentConfig = ref({})
@@ -33,11 +38,11 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ==================== 计算属性 ====================
   const selectedAgent = computed(() =>
-    selectedAgentId.value ? agents.value.find(a => a.id === selectedAgentId.value) : null
+    selectedAgentId.value ? agents.value.find(a => a.agent_id === selectedAgentId.value || a.id === selectedAgentId.value) : null
   )
 
   const defaultAgent = computed(() =>
-    defaultAgentId.value ? agents.value.find(a => a.id === defaultAgentId.value) : agents.value[0]
+    defaultAgentId.value ? agents.value.find(a => a.agent_id === defaultAgentId.value || a.id === defaultAgentId.value) : agents.value[0]
   )
 
   const agentsList = computed(() => agents.value)
@@ -87,15 +92,18 @@ export const useAgentStore = defineStore('agent', () => {
       await fetchAgents()
       await fetchDefaultAgent()
 
-      if (!selectedAgentId.value || !agents.value.find(a => a.id === selectedAgentId.value)) {
-        if (defaultAgentId.value && agents.value.find(a => a.id === defaultAgentId.value)) {
+      // 使用 agent_id 或 id 匹配
+      const findAgent = (id) => agents.value.find(a => a.agent_id === id || a.id === id)
+
+      if (!selectedAgentId.value || !findAgent(selectedAgentId.value)) {
+        if (defaultAgentId.value && findAgent(defaultAgentId.value)) {
           await selectAgent(defaultAgentId.value)
         } else if (agents.value.length > 0) {
-          const firstAgentId = agents.value[0].id
+          // 优先使用 agent_id
+          const firstAgentId = agents.value[0].agent_id || agents.value[0].id
           await selectAgent(firstAgentId)
         }
       } else {
-        console.log('Condition FALSE: Persisted selected agent is valid. Keeping it.')
         // 确保已缓存的智能体详细信息存在
         if (selectedAgentId.value && !agentDetails.value[selectedAgentId.value]) {
           try {
@@ -160,7 +168,6 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       const response = await agentApi.getAgentDetail(agentId)
       agentDetails.value[agentId] = response
-      // availableTools.value[agentId] = response.available_tools || []
       return response
     } catch (err) {
       console.error(`Failed to fetch agent detail for ${agentId}:`, err)
@@ -205,17 +212,21 @@ export const useAgentStore = defineStore('agent', () => {
    * 选择智能体
    */
   async function selectAgent(agentId) {
-    if (agents.value.find(a => a.id === agentId)) {
-      selectedAgentId.value = agentId
+    // 使用 agent_id 字段匹配（兼容旧的 id 字段）
+    const agent = agents.value.find(a => a.agent_id === agentId || a.id === agentId)
+    if (agent) {
+      // 统一使用 agent_id 作为选中标识
+      const targetAgentId = agent.agent_id || agent.id
+      selectedAgentId.value = targetAgentId
       // 清空之前的配置
       agentConfig.value = {}
       originalAgentConfig.value = {}
 
       // 自动获取智能体详细信息（包含 configurable_items）
       try {
-        await fetchAgentDetail(agentId)
+        await fetchAgentDetail(targetAgentId)
       } catch (err) {
-        console.warn(`Failed to fetch agent detail for ${agentId}:`, err)
+        console.warn(`Failed to fetch agent detail for ${targetAgentId}:`, err)
         // 不抛出错误，允许继续选择智能体
       }
     }
@@ -287,6 +298,135 @@ export const useAgentStore = defineStore('agent', () => {
     Object.assign(agentConfig.value, updates)
   }
 
+  // ==================== 智能体管理方法（新增） ====================
+
+  /**
+   * 获取分组的智能体列表
+   */
+  async function fetchGroupedAgents() {
+    isLoadingAgents.value = true
+    error.value = null
+
+    try {
+      const response = await agentManageApi.list()
+      builtinAgents.value = response.builtin || []
+      myAgents.value = response.my_agents || []
+      publicAgents.value = response.public || []
+
+      // 同时更新 agents 列表（兼容现有逻辑）
+      agents.value = [...builtinAgents.value, ...myAgents.value, ...publicAgents.value]
+    } catch (err) {
+      console.error('Failed to fetch grouped agents:', err)
+      handleChatError(err, 'fetch')
+      error.value = err.message
+      throw err
+    } finally {
+      isLoadingAgents.value = false
+    }
+  }
+
+  /**
+   * 创建自定义智能体
+   * @param {Object} data - 智能体配置
+   */
+  async function createAgent(data) {
+    try {
+      const response = await agentManageApi.create(data)
+      // 添加到我的智能体列表
+      myAgents.value.unshift(response)
+      agents.value = [...builtinAgents.value, ...myAgents.value, ...publicAgents.value]
+      return response
+    } catch (err) {
+      console.error('Failed to create agent:', err)
+      handleChatError(err, 'save')
+      error.value = err.message
+      throw err
+    }
+  }
+
+  /**
+   * 更新自定义智能体
+   * @param {string} agentId - 智能体ID
+   * @param {Object} data - 更新的配置
+   */
+  async function updateCustomAgent(agentId, data) {
+    try {
+      const response = await agentManageApi.update(agentId, data)
+      // 更新本地列表
+      const index = myAgents.value.findIndex(a => a.agent_id === agentId)
+      if (index !== -1) {
+        myAgents.value[index] = response
+      }
+      agents.value = [...builtinAgents.value, ...myAgents.value, ...publicAgents.value]
+      return response
+    } catch (err) {
+      console.error('Failed to update agent:', err)
+      handleChatError(err, 'save')
+      error.value = err.message
+      throw err
+    }
+  }
+
+  /**
+   * 删除自定义智能体
+   * @param {string} agentId - 智能体ID
+   */
+  async function deleteCustomAgent(agentId) {
+    try {
+      await agentManageApi.delete(agentId)
+      // 从本地列表移除
+      myAgents.value = myAgents.value.filter(a => a.agent_id !== agentId)
+      agents.value = [...builtinAgents.value, ...myAgents.value, ...publicAgents.value]
+
+      // 如果删除的是当前选中的智能体，切换到默认智能体
+      if (selectedAgentId.value === agentId) {
+        if (defaultAgentId.value) {
+          await selectAgent(defaultAgentId.value)
+        } else if (agents.value.length > 0) {
+          await selectAgent(agents.value[0].agent_id || agents.value[0].id)
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete agent:', err)
+      handleChatError(err, 'delete')
+      error.value = err.message
+      throw err
+    }
+  }
+
+  /**
+   * 复制智能体
+   * @param {string} agentId - 源智能体ID
+   */
+  async function duplicateAgent(agentId) {
+    try {
+      const response = await agentManageApi.duplicate(agentId)
+      // 添加到我的智能体列表
+      myAgents.value.unshift(response)
+      agents.value = [...builtinAgents.value, ...myAgents.value, ...publicAgents.value]
+      return response
+    } catch (err) {
+      console.error('Failed to duplicate agent:', err)
+      handleChatError(err, 'save')
+      error.value = err.message
+      throw err
+    }
+  }
+
+  /**
+   * 获取智能体详情（用于编辑）
+   * @param {string} agentId - 智能体ID
+   */
+  async function getAgentForEdit(agentId) {
+    try {
+      return await agentManageApi.get(agentId)
+    } catch (err) {
+      console.error('Failed to get agent for edit:', err)
+      handleChatError(err, 'fetch')
+      error.value = err.message
+      throw err
+    }
+  }
 
   /**
    * 清除错误状态
@@ -302,6 +442,9 @@ export const useAgentStore = defineStore('agent', () => {
     agents.value = []
     selectedAgentId.value = null
     defaultAgentId.value = null
+    builtinAgents.value = []
+    myAgents.value = []
+    publicAgents.value = []
     agentConfig.value = {}
     originalAgentConfig.value = {}
     agentDetails.value = {}
@@ -318,6 +461,9 @@ export const useAgentStore = defineStore('agent', () => {
     agents,
     selectedAgentId,
     defaultAgentId,
+    builtinAgents,
+    myAgents,
+    publicAgents,
     agentConfig,
     originalAgentConfig,
     agentDetails,
@@ -339,6 +485,7 @@ export const useAgentStore = defineStore('agent', () => {
     // 方法
     initialize,
     fetchAgents,
+    fetchGroupedAgents,
     fetchAgentDetail,
     fetchDefaultAgent,
     setDefaultAgent,
@@ -348,6 +495,11 @@ export const useAgentStore = defineStore('agent', () => {
     resetAgentConfig,
     updateConfigItem,
     updateAgentConfig,
+    createAgent,
+    updateCustomAgent,
+    deleteCustomAgent,
+    duplicateAgent,
+    getAgentForEdit,
     clearError,
     reset
   }
